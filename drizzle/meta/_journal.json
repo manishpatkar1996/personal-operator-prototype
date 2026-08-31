@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "6",
+      "when": 1788191628089,
+      "tag": "0000_dashing_sunspot",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1788191654980,
+      "tag": "0001_milky_expediter",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788192875944,
+      "tag": "0002_blushing_machine_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1788195411847,
+      "tag": "0003_giant_the_hunter",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1788196131453,
+      "tag": "0004_nasty_expediter",
+      "breakpoints": true
+    }
+  ]
+}
