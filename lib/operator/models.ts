@@ -13,6 +13,7 @@ export type OperatorTask =
   | "content_outline"
   | "content_draft"
   | "startup_research"
+  | "startup_chat"
   | "council";
 
 export type ModelRoute = {
@@ -79,6 +80,13 @@ export const MODEL_ROUTES: Record<OperatorTask, ModelRoute> = {
     useWhen: "Map competitors, assumptions, and evidence with citations. Daily research batch.",
     skipLlmWhen: "The idea is still in capture/framing with no research requested.",
     estimatedUsdPerRun: "~$0.02",
+  },
+  startup_chat: {
+    task: "startup_chat",
+    model: MODEL_TIERS.mini,
+    useWhen: "User opens an idea and talks it into a concrete problem, user, and experiment.",
+    skipLlmWhen: "The idea is only being captured as a title.",
+    estimatedUsdPerRun: "~$0.01",
   },
   council: {
     task: "council",

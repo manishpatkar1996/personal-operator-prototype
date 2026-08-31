@@ -2,7 +2,7 @@ import type { OperatorContext } from "./types.ts";
 import { remainingCapacityMinutes } from "./calendar.ts";
 
 export type CouncilDraft = {
-  roleId: "tyrion" | "samwell";
+  roleId: string;
   title: string;
   rationale: string;
 };

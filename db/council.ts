@@ -15,7 +15,7 @@ export async function runCouncil() {
   const existing = await db().prepare("SELECT COUNT(*) AS count FROM council_proposals WHERE status='proposed'").first<{ count: number }>();
   if ((existing?.count ?? 0) > 0) {
     const createdAt = new Date().toISOString();
-    await db().prepare("UPDATE council_roles SET last_run_at=? WHERE id IN ('tyrion','samwell')").bind(createdAt).run();
+    await db().prepare("UPDATE council_roles SET last_run_at=? WHERE id IN ('tyrion','varys','aemon','davos','samwell')").bind(createdAt).run();
     return { message: "The current council proposals still need review", created: 0, model: "skipped" };
   }
   const [goals, workspace, careerProfile] = await Promise.all([listGoals(), getWorkspace(), getCareerProfile()]);
@@ -36,9 +36,10 @@ export async function runCouncil() {
           learning: context.learningItems.slice(0, 4),
         }),
       ) as { proposals?: { roleId?: string; title?: string; rationale?: string }[] };
-      const next = (payload.proposals ?? []).filter(item => item.roleId === "tyrion" || item.roleId === "samwell").slice(0, 2);
+      const allowed = new Set(["tyrion", "varys", "aemon", "davos", "samwell"]);
+      const next = (payload.proposals ?? []).filter(item => allowed.has(String(item.roleId))).slice(0, 2);
       if (next.length === 2) {
-        drafts = next.map(item => ({ roleId: item.roleId as "tyrion" | "samwell", title: String(item.title ?? "").slice(0, 160), rationale: String(item.rationale ?? "").slice(0, 500) }));
+        drafts = next.map(item => ({ roleId: String(item.roleId), title: String(item.title ?? "").slice(0, 160), rationale: String(item.rationale ?? "").slice(0, 500) }));
         model = "standard";
       }
     } catch {
@@ -47,7 +48,7 @@ export async function runCouncil() {
   }
   const createdAt = new Date().toISOString();
   await db().batch([
-    db().prepare("UPDATE council_roles SET last_run_at=? WHERE id IN ('tyrion','samwell')").bind(createdAt),
+    db().prepare("UPDATE council_roles SET last_run_at=? WHERE id IN ('tyrion','varys','aemon','davos','samwell')").bind(createdAt),
     ...drafts.map(draft => db().prepare("INSERT INTO council_proposals (id,role_id,title,rationale,status,created_at) VALUES (?,?,?,?,?,?)")
       .bind(crypto.randomUUID(), draft.roleId, draft.title, draft.rationale, "proposed", createdAt)),
   ]);

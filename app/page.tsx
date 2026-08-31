@@ -1,5 +1,6 @@
 "use client";
 
+import { OPERATOR_AGENTS } from "@/lib/operator/agents";
 import { FormEvent, useEffect, useMemo, useState } from "react";
 
 type View = "Today" | "Goals" | "Career" | "Learning" | "Startup Lab" | "Content" | "Memory" | "Small Council";
@@ -67,6 +68,50 @@ function asList(value: unknown) {
   return [];
 }
 
+function agentFor(program: string) {
+  return OPERATOR_AGENTS.find(agent => agent.program === program);
+}
+
+function inlineMarkdown(text: string) {
+  const parts = text.split(/(\*\*[^*]+\*\*)/g);
+  return parts.map((part, index) => part.startsWith("**") && part.endsWith("**") ? <strong key={index}>{part.slice(2, -2)}</strong> : part);
+}
+
+function Markdown({ value }: { value: string }) {
+  const chunks = value.replace(/\r\n/g, "\n").split(/\n{2,}/);
+  const blocks: React.ReactNode[] = [];
+  for (const chunk of chunks) {
+    const trimmed = chunk.trim();
+    if (!trimmed || trimmed === "---") {
+      if (trimmed === "---") blocks.push(<hr key={blocks.length} />);
+      continue;
+    }
+    const lines = trimmed.split("\n");
+    if (lines.every(line => /^\s*[-*]\s+/.test(line))) {
+      blocks.push(<ul key={blocks.length}>{lines.map((line, index) => <li key={index}>{inlineMarkdown(line.replace(/^\s*[-*]\s+/, "").replace(/\[x\]/i, "✓ ").replace(/\[\s\]/, "○ "))}</li>)}</ul>);
+      continue;
+    }
+    const first = lines[0].trim();
+    if (first.startsWith("# ") || first.startsWith("## ")) {
+      blocks.push(first.startsWith("# ")
+        ? <h2 key={blocks.length}>{inlineMarkdown(first.slice(2))}</h2>
+        : <h3 key={blocks.length}>{inlineMarkdown(first.slice(3))}</h3>);
+      const rest = lines.slice(1);
+      if (rest.length) blocks.push(<p key={blocks.length}>{rest.map((line, index) => <span key={index}>{inlineMarkdown(line)}{index < rest.length - 1 ? <br /> : null}</span>)}</p>);
+      continue;
+    }
+    blocks.push(<p key={blocks.length}>{lines.map((line, index) => <span key={index}>{inlineMarkdown(line)}{index < lines.length - 1 ? <br /> : null}</span>)}</p>);
+  }
+  return <article className="md">{blocks}</article>;
+}
+
+function SetupPanel({ title, hint, open, onOpenChange, children }: { title: string; hint: string; open: boolean; onOpenChange: (open: boolean) => void; children: React.ReactNode }) {
+  return <details className="setup-panel" open={open} onToggle={event => { const next = event.currentTarget.open; if (next !== open) onOpenChange(next); }}>
+    <summary><span>{title}</span><small>{hint}</small></summary>
+    {children}
+  </details>;
+}
+
 async function apiRequest(method: string, body?: unknown, suffix = "") {
   const response = await fetch(`/api/goals${suffix}`, {
     method,
@@ -85,8 +130,9 @@ async function workspaceRequest(action?: string, data?: Record<string, unknown>)
   return result;
 }
 
-function Heading({ eyebrow, title, copy, action }: { eyebrow: string; title: string; copy: string; action?: React.ReactNode }) {
-  return <header className="page-heading"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p className="lede">{copy}</p></div>{action}</header>;
+function Heading({ eyebrow, title, copy, action, agent }: { eyebrow: string; title: string; copy: string; action?: React.ReactNode; agent?: string }) {
+  const named = agentFor(agent ?? eyebrow);
+  return <header className="page-heading"><div>{named && <span className="agent-chip">{named.label} · {named.roleName}</span>}<span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p className="lede">{copy}</p></div>{action}</header>;
 }
 
 function ProgressBar({ value }: { value: number }) {
@@ -103,12 +149,15 @@ function GoalList({ goals, selectedId, select }: { goals: Goal[]; selectedId?: s
     {groups.map(group => {
       const items = goals.filter(goal => group.states.includes(goal.state));
       if (!items.length) return null;
-      return <section key={group.label}><span className="label">{group.label} · {items.length}</span><div className="goal-picker">{items.map(goal => {
+      return <section key={group.label}><span className="label">{group.label} · {items.length}</span><div className="goal-picker">{items.map((goal, index) => {
         const next = goal.milestones.find(milestone => milestone.completionPercentage < 100 && milestone.status !== "skipped");
-        return <button key={goal.id} className={selectedId === goal.id ? "selected" : ""} onClick={() => select(goal.id)}>
-          <span className="goal-picker-top"><strong>{goal.title}</strong><b>{goal.progressPercentage}%</b></span>
-          <span className="mini-progress"><i style={{ width: `${goal.progressPercentage}%` }} /></span>
-          <small>{next ? `Next: ${next.title} · ${formatDate(next.targetDate)}` : "No open milestone"}</small>
+        return <button type="button" key={goal.id} className={`goal-card ${selectedId === goal.id ? "selected" : ""}`} onClick={() => select(goal.id)}>
+          <span className="goal-index">{String(index + 1).padStart(2, "0")}</span>
+          <span className="goal-card-body">
+            <span className="goal-picker-top"><strong>{goal.title}</strong><b>{goal.progressPercentage}%</b></span>
+            <span className="mini-progress"><i style={{ width: `${goal.progressPercentage}%` }} /></span>
+            <small>{next ? `Next: ${next.title}` : "No open milestone"}</small>
+          </span>
         </button>;
       })}</div></section>;
     })}
@@ -305,7 +354,7 @@ function TodayPage({ goals, data, mutate, refresh }: { goals: Goal[]; data: Work
     await mutate("propose_calendar_block", { title: focusTitle, goalId: candidate?.goal.id, milestoneId: candidate?.milestone.id, startAt: start.toISOString(), endAt: end.toISOString() });
   }
 
-  return <><Heading eyebrow={dateHeading} title="Today, in service of your goals" copy="The Operator combines milestone urgency with scored roles and calendar constraints before recommending where your attention should go." action={<div className="actions"><button onClick={() => void scheduleTopRole()}>Propose application block</button><button onClick={() => mutate("request_calendar_sync")}>Request refresh</button></div>} />
+  return <><Heading eyebrow={dateHeading} title="Today, in service of your goals" copy="The Operator combines milestone urgency with scored roles and calendar constraints before recommending where your attention should go." agent="Today" action={<div className="actions"><button onClick={() => void scheduleTopRole()}>Propose application block</button><button onClick={() => mutate("request_calendar_sync")}>Request refresh</button></div>} />
     <div className="today-summary box"><div><span className="label">RECOMMENDED SHAPE · {generation}</span><h2>{planPayload?.plan?.summary ?? "Loading today’s plan…"}</h2><p>{calendarConnected ? `Google Calendar is connected. Today currently has ${calendar.length} blocks covering ${calendarHours}.` : "Connect Google Calendar to replace the local sample plan with your real commitments."}{typeof capacity?.remainingMinutes === "number" ? ` ${capacity.remainingMinutes} minutes of an 8-hour focus budget remain.` : ""}{planPayload?.model?.reason ? ` ${planPayload.model.reason}` : ""}</p></div><div className="allocation-total"><strong>100%</strong><small>allocated</small></div></div>
     <article className="box calendar-control"><div className="calendar-policy"><div><span className="label">CALENDAR AUTONOMY</span><h2>Choose what the Operator may do</h2><p>External meetings are always read-only. This setting applies only to goal blocks created by the Operator.</p></div><label>Permission level<select value={calendarPolicy} onChange={event => mutate("update_calendar_policy", { policy: event.target.value })}><option value="propose_only">Propose only — ask every time</option><option value="auto_create">Automatically add new goal blocks</option><option value="auto_create_and_move_owned">Add and move Operator-owned blocks</option></select></label></div><form className="focus-planner" onSubmit={submitFocus}><div><span className="label">PLAN A GOAL BLOCK</span><h2>Turn a milestone into calendar time</h2></div><label>Milestone<select value={focusMilestoneId} onChange={event => { const next = candidates.find(item => item.milestone.id === event.target.value); setFocusMilestoneId(event.target.value); if (next) setFocusTitle(next.milestone.title); }}>{candidates.map(item => <option key={item.milestone.id} value={item.milestone.id}>{item.goal.title} · {item.milestone.title}</option>)}</select></label><label>Calendar title<input required value={focusTitle} onChange={event => setFocusTitle(event.target.value)} /></label><label>Start<input required type="datetime-local" value={focusStart} onChange={event => setFocusStart(event.target.value)} /></label><label>Duration<select value={focusDuration} onChange={event => setFocusDuration(Number(event.target.value))}>{[30,45,60,90].map(minutes => <option key={minutes} value={minutes}>{minutes} minutes</option>)}</select></label><button className="primary">{calendarPolicy === "propose_only" ? "Propose block" : "Queue block"}</button></form>{openCalendarBlocks.length > 0 && <div className="calendar-queue"><div className="between"><span className="label">CALENDAR QUEUE · {openCalendarBlocks.length}</span>{pendingWrites > 0 && <small>{pendingWrites} waiting for calendar worker</small>}</div>{openCalendarBlocks.map(item => <div key={String(item.id)}><span><strong>{String(item.title)}</strong><small>{new Intl.DateTimeFormat("en-IN", { weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit", timeZone:"Asia/Kolkata" }).format(new Date(String(item.start_at)))} · {statusLabel(String(item.state))}</small>{item.state === "write_failed" && <em>The calendar write failed and needs another review.</em>}</span>{item.state === "proposed" && <div className="actions"><button className="primary" onClick={() => mutate("review_calendar_block", { id: item.id, decision: "approve" })}>Approve & add</button><button onClick={() => mutate("review_calendar_block", { id: item.id, decision: "dismiss" })}>Dismiss</button></div>}{item.state === "write_failed" && <button onClick={() => mutate("retry_calendar_write", { id: item.id })}>Retry write</button>}</div>)}</div>}</article>
     <div className="priority-grid">{priorities.map((item, index) => <article className="box priority-card" key={item.id}><div className="priority-number">0{index + 1}</div><span className="label">{item.domain}</span><h2>{item.title}</h2><p>{item.reason}</p><div className="allocation"><strong>{item.allocation}%</strong><span><i style={{ width: `${item.allocation}%` }} /></span></div><small>{item.estimatedMinutes} min · {Math.round(item.confidence * 100)}% confidence{item.dueDate ? ` · due ${formatDate(item.dueDate)}` : ""}</small></article>)}{priorities.length === 0 && <article className="box"><p>The plan will appear here once goals or roles are available.</p></article>}</div>
@@ -318,7 +367,14 @@ function TodayPage({ goals, data, mutate, refresh }: { goals: Goal[]; data: Work
 function CareerOnboarding({ onSaved }: { onSaved: () => Promise<void> }) {
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
   const [message, setMessage] = useState("");
+  const [setupOpen, setSetupOpen] = useState(true);
+  const [hydrated, setHydrated] = useState(false);
   useEffect(() => { void fetch("/api/career/profile").then(response => response.json()).then(result => setProfile(result.profile)); }, []);
+  useEffect(() => {
+    if (!profile || hydrated) return;
+    setSetupOpen(profile.onboardingStatus !== "complete" && String(profile.resumeText ?? "").length < 80);
+    setHydrated(true);
+  }, [profile, hydrated]);
   const list = (value: unknown) => Array.isArray(value) ? value.join(", ") : "";
   const split = (value: string) => value.split(",").map(item => item.trim()).filter(Boolean);
   async function save(event: FormEvent) {
@@ -327,7 +383,7 @@ function CareerOnboarding({ onSaved }: { onSaved: () => Promise<void> }) {
     const response = await fetch("/api/career/profile", { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(input) });
     const result = await response.json();
     if (!response.ok) { setMessage(result.error ?? "Career profile could not be saved"); return; }
-    setProfile(result.profile); setMessage("Career context saved. Open roles were rescored against this résumé."); await onSaved();
+    setProfile(result.profile); setMessage("Career context saved. Open roles were rescored against this résumé."); setSetupOpen(false); await onSaved();
   }
   async function onResumeFile(file: File | undefined) {
     if (!file || !profile) return;
@@ -339,8 +395,10 @@ function CareerOnboarding({ onSaved }: { onSaved: () => Promise<void> }) {
     setProfile({ ...profile, resumeFilename: file.name, resumeText, onboardingStatus: "in_progress" });
     setMessage(`${file.name} loaded. Save career context to rescore the board.`);
   }
-  if (!profile) return <article className="box onboarding-card"><span className="label">CAREER ONBOARDING</span><p>Loading your career context…</p></article>;
-  return <form className="box onboarding-card" onSubmit={save}><div className="between"><div><span className="label">CAREER ONBOARDING · {statusLabel(String(profile.onboardingStatus))}</span><h2>Give the Operator your career filter</h2><p>This context will drive role discovery, fit explanations, résumé changes, and learning gaps.</p></div><button className="primary">Save career context</button></div><div className="onboarding-grid"><label>Target roles<input value={list(profile.targetRoles)} onChange={event => setProfile({ ...profile, targetRoles:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Senior Product Manager, Product Lead AI" /></label><label>Locations<input value={list(profile.locations)} onChange={event => setProfile({ ...profile, locations:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Bengaluru, Remote India" /></label><label>Work modes<input value={list(profile.workModes)} onChange={event => setProfile({ ...profile, workModes:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Remote, Hybrid" /></label><label>Seniority<input value={list(profile.seniority)} onChange={event => setProfile({ ...profile, seniority:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Senior, Lead, Principal" /></label><label>Industries<input value={list(profile.industries)} onChange={event => setProfile({ ...profile, industries:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="AI, Fintech, Healthtech" /></label><label>Strengths<input value={list(profile.strengths)} onChange={event => setProfile({ ...profile, strengths:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="0-to-1 products, AI strategy" /></label><label>Exclude<input value={list(profile.exclusions)} onChange={event => setProfile({ ...profile, exclusions:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Pure project management" /></label><label>Compensation notes<input value={String(profile.compensationNotes ?? "")} onChange={event => setProfile({ ...profile, compensationNotes:event.target.value, onboardingStatus:"in_progress" })} /></label><label>Résumé filename<input value={String(profile.resumeFilename ?? "")} onChange={event => setProfile({ ...profile, resumeFilename:event.target.value, onboardingStatus:"in_progress" })} placeholder="manish-resume.tex" /></label><label>Upload résumé text<input type="file" accept=".txt,.md,.tex,.html,text/plain" onChange={event => void onResumeFile(event.target.files?.[0])} /></label><label className="resume-source">Résumé / LaTeX source<textarea value={String(profile.resumeText ?? "")} onChange={event => setProfile({ ...profile, resumeText:event.target.value, onboardingStatus:"in_progress" })} placeholder="Paste your canonical résumé or LaTeX source here. Job-specific versions will be generated from this copy." /></label></div><div className="between onboarding-foot"><small>{message}</small><label className="complete-check"><input type="checkbox" checked={profile.onboardingStatus === "complete"} onChange={event => setProfile({ ...profile, onboardingStatus:event.target.checked ? "complete" : "in_progress" })} /> Mark onboarding complete</label></div></form>;
+  if (!profile) return <article className="box onboarding-card"><p>Loading career context…</p></article>;
+  return <SetupPanel title={`Varys · Career preferences · ${statusLabel(String(profile.onboardingStatus))}`} hint={setupOpen ? "Used in Varys’s prompt" : "Edit résumé and filters"} open={setupOpen} onOpenChange={setSetupOpen}>
+    <form className="box onboarding-card" onSubmit={save}><div className="between"><div><h2>Give Varys your career filter</h2><p>This context is injected into the Career Intelligence prompt. It drives fit scores, résumé variants, and LinkedIn search.</p></div><button className="primary">Save</button></div><div className="onboarding-grid"><label>Target roles<input value={list(profile.targetRoles)} onChange={event => setProfile({ ...profile, targetRoles:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Senior Product Manager, Product Lead AI" /></label><label>Locations<input value={list(profile.locations)} onChange={event => setProfile({ ...profile, locations:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Bengaluru, Remote India" /></label><label>Work modes<input value={list(profile.workModes)} onChange={event => setProfile({ ...profile, workModes:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Remote, Hybrid" /></label><label>Seniority<input value={list(profile.seniority)} onChange={event => setProfile({ ...profile, seniority:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Senior, Lead, Principal" /></label><label>Industries<input value={list(profile.industries)} onChange={event => setProfile({ ...profile, industries:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="AI, Fintech, Healthtech" /></label><label>Strengths<input value={list(profile.strengths)} onChange={event => setProfile({ ...profile, strengths:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="0-to-1 products, AI strategy" /></label><label>Exclude<input value={list(profile.exclusions)} onChange={event => setProfile({ ...profile, exclusions:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Pure project management" /></label><label>Compensation notes<input value={String(profile.compensationNotes ?? "")} onChange={event => setProfile({ ...profile, compensationNotes:event.target.value, onboardingStatus:"in_progress" })} /></label><label>Résumé filename<input value={String(profile.resumeFilename ?? "")} onChange={event => setProfile({ ...profile, resumeFilename:event.target.value, onboardingStatus:"in_progress" })} placeholder="manish-resume.tex" /></label><label>Upload résumé text<input type="file" accept=".txt,.md,.tex,.html,text/plain" onChange={event => void onResumeFile(event.target.files?.[0])} /></label><label className="resume-source">Résumé / LaTeX source<textarea value={String(profile.resumeText ?? "")} onChange={event => setProfile({ ...profile, resumeText:event.target.value, onboardingStatus:"in_progress" })} placeholder="Paste your canonical résumé or LaTeX source here." /></label></div><div className="between onboarding-foot"><small>{message}</small><label className="complete-check"><input type="checkbox" checked={profile.onboardingStatus === "complete"} onChange={event => setProfile({ ...profile, onboardingStatus:event.target.checked ? "complete" : "in_progress" })} /> Mark onboarding complete</label></div></form>
+  </SetupPanel>;
 }
 
 function JobIntake({ refresh }: { refresh: () => Promise<void> }) {
@@ -427,15 +485,24 @@ function LearningConfiguration() {
   const [configuration, setConfiguration] = useState<{ preferences: Record<string, unknown>; sources: Record<string, unknown>[] } | null>(null);
   const [source, setSource] = useState({ name:"", sourceType:"website", url:"", priority:3 });
   const [message, setMessage] = useState("");
+  const [setupOpen, setSetupOpen] = useState(true);
+  const [hydrated, setHydrated] = useState(false);
   const refresh = async () => { const result = await fetch("/api/learning/preferences").then(response => response.json()); setConfiguration(result); };
   useEffect(() => { void refresh(); }, []);
+  useEffect(() => {
+    if (!configuration || hydrated) return;
+    setSetupOpen(configuration.sources.length === 0);
+    setHydrated(true);
+  }, [configuration, hydrated]);
   const list = (value: unknown) => Array.isArray(value) ? value.join(", ") : "";
   const split = (value: string) => value.split(",").map(item => item.trim()).filter(Boolean);
-  async function savePreferences(event: FormEvent) { event.preventDefault(); if (!configuration) return; const response = await fetch("/api/learning/preferences", { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ preferences:configuration.preferences }) }); const result = await response.json(); setMessage(response.ok ? "Learning preferences saved." : result.error); if (response.ok) await refresh(); }
+  async function savePreferences(event: FormEvent) { event.preventDefault(); if (!configuration) return; const response = await fetch("/api/learning/preferences", { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ preferences:configuration.preferences }) }); const result = await response.json(); setMessage(response.ok ? "Learning preferences saved." : result.error); if (response.ok) { setSetupOpen(false); await refresh(); } }
   async function addSource(event: FormEvent) { event.preventDefault(); const response = await fetch("/api/learning/preferences", { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ source }) }); const result = await response.json(); setMessage(response.ok ? "Learning source added." : result.error); if (response.ok) { setSource({ name:"", sourceType:"website", url:"", priority:3 }); await refresh(); } }
   async function toggleSource(item: Record<string, unknown>) { await fetch("/api/learning/preferences", { method:"PATCH", headers:{"Content-Type":"application/json"}, body:JSON.stringify({ id:item.id, source:{ enabled:!item.enabled } }) }); await refresh(); }
-  if (!configuration) return <article className="box learning-config"><span className="label">LEARNING SETUP</span><p>Loading learning preferences…</p></article>;
-  return <article className="box learning-config"><div><span className="label">LEARNING SETUP</span><h2>Choose what the research stream should follow</h2><p>Enabled sources can be collected into the queue. Summaries use nano when a key is present; otherwise the page title and excerpt are stored.</p></div><form className="learning-preferences" onSubmit={savePreferences}><label>Tracks<input value={list(configuration.preferences.tracks)} onChange={event => setConfiguration({ ...configuration, preferences:{...configuration.preferences,tracks:split(event.target.value)} })} placeholder="Agentic AI, AI news, Product management" /></label><label>Interests<input value={list(configuration.preferences.interests)} onChange={event => setConfiguration({ ...configuration, preferences:{...configuration.preferences,interests:split(event.target.value)} })} placeholder="Memory, tool use, evaluations" /></label><label>Weekly minutes<input type="number" min="0" max="10080" value={Number(configuration.preferences.weeklyBudgetMinutes ?? 300)} onChange={event => setConfiguration({ ...configuration, preferences:{...configuration.preferences,weeklyBudgetMinutes:Number(event.target.value)} })} /></label><button className="primary">Save preferences</button></form><form className="source-add" onSubmit={addSource}><label>Source name<input required value={source.name} onChange={event => setSource({...source,name:event.target.value})} placeholder="OpenAI research" /></label><label>Type<select value={source.sourceType} onChange={event => setSource({...source,sourceType:event.target.value})}>{["website","rss","newsletter","youtube","podcast","journal","paper_repository"].map(type => <option value={type} key={type}>{statusLabel(type)}</option>)}</select></label><label>URL<input required type="url" value={source.url} onChange={event => setSource({...source,url:event.target.value})} placeholder="https://…" /></label><label>Priority<select value={source.priority} onChange={event => setSource({...source,priority:Number(event.target.value)})}>{[5,4,3,2,1].map(value => <option key={value}>{value}</option>)}</select></label><button>Add source</button></form>{message && <small className="config-message">{message}</small>}<div className="source-list">{configuration.sources.map(item => <button key={String(item.id)} className={item.enabled ? "enabled" : ""} onClick={() => toggleSource(item)}><span><strong>{String(item.name)}</strong><small>{statusLabel(String(item.sourceType))} · Priority {String(item.priority)}</small></span><b>{item.enabled ? "Following" : "Paused"}</b></button>)}</div></article>;
+  if (!configuration) return <article className="box learning-config"><p>Loading learning preferences…</p></article>;
+  return <SetupPanel title="Aemon · Learning preferences" hint={configuration.sources.length ? "Tracks, interests, sources" : "Add a source to start"} open={setupOpen} onOpenChange={setSetupOpen}>
+    <article className="box learning-config"><div><h2>What Aemon should follow</h2><p>These preferences are injected into the learning prompt. The queue below is the work.</p></div><form className="learning-preferences" onSubmit={savePreferences}><label>Tracks<input value={list(configuration.preferences.tracks)} onChange={event => setConfiguration({ ...configuration, preferences:{...configuration.preferences,tracks:split(event.target.value)} })} placeholder="Agentic AI, AI news, Product management" /></label><label>Interests<input value={list(configuration.preferences.interests)} onChange={event => setConfiguration({ ...configuration, preferences:{...configuration.preferences,interests:split(event.target.value)} })} placeholder="Memory, tool use, evaluations" /></label><label>Weekly minutes<input type="number" min="0" max="10080" value={Number(configuration.preferences.weeklyBudgetMinutes ?? 300)} onChange={event => setConfiguration({ ...configuration, preferences:{...configuration.preferences,weeklyBudgetMinutes:Number(event.target.value)} })} /></label><button className="primary">Save</button></form><form className="source-add" onSubmit={addSource}><label>Source name<input required value={source.name} onChange={event => setSource({...source,name:event.target.value})} placeholder="OpenAI research" /></label><label>Type<select value={source.sourceType} onChange={event => setSource({...source,sourceType:event.target.value})}>{["website","rss","newsletter","youtube","podcast","journal","paper_repository"].map(type => <option value={type} key={type}>{statusLabel(type)}</option>)}</select></label><label>URL<input required type="url" value={source.url} onChange={event => setSource({...source,url:event.target.value})} placeholder="https://…" /></label><label>Priority<select value={source.priority} onChange={event => setSource({...source,priority:Number(event.target.value)})}>{[5,4,3,2,1].map(value => <option key={value}>{value}</option>)}</select></label><button>Add source</button></form>{message && <small className="config-message">{message}</small>}<div className="source-list">{configuration.sources.map(item => <button key={String(item.id)} className={item.enabled ? "enabled" : ""} onClick={() => toggleSource(item)}><span><strong>{String(item.name)}</strong><small>{statusLabel(String(item.sourceType))} · Priority {String(item.priority)}</small></span><b>{item.enabled ? "Following" : "Paused"}</b></button>)}</div></article>
+  </SetupPanel>;
 }
 
 function LearningPage({ data, mutate, refresh }: { data: WorkspaceData; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>; refresh: () => Promise<void> }) {
@@ -461,18 +528,72 @@ function LearningPage({ data, mutate, refresh }: { data: WorkspaceData; mutate: 
 
 function StartupPage({ data, mutate, refresh }: { data: WorkspaceData; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>; refresh: () => Promise<void> }) {
   const [adding, setAdding] = useState(false); const [title, setTitle] = useState(""); const [problem, setProblem] = useState(""); const [targetUser, setTargetUser] = useState("");
-  async function submit(event: FormEvent) { event.preventDefault(); await mutate("add_startup", { title, problem, targetUser, reviewDate: addDays(14) }); setTitle(""); setProblem(""); setTargetUser(""); setAdding(false); }
-  async function research(id: string) {
-    const response = await fetch("/api/startup/research", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id }) });
-    if (!response.ok) {
-      const result = await response.json() as { error?: string };
-      throw new Error(result.error ?? "Research failed");
-    }
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [draft, setDraft] = useState({ problem: "", targetUser: "", experiment: "" });
+  const [messages, setMessages] = useState<Record<string, unknown>[]>([]);
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState("");
+  const idea = data.startupIdeas.find(item => String(item.id) === selectedId) ?? null;
+  useEffect(() => {
+    if (!idea) return;
+    setDraft({ problem: String(idea.problem ?? ""), targetUser: String(idea.target_user ?? ""), experiment: String(idea.experiment || idea.next_validation || "") });
+    void fetch(`/api/startup?id=${encodeURIComponent(String(idea.id))}`).then(response => response.json()).then(result => setMessages(result.messages ?? []));
+  }, [selectedId, idea?.id]);
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    await mutate("add_startup", { title, problem, targetUser, reviewDate: addDays(14) });
+    setTitle(""); setProblem(""); setTargetUser(""); setAdding(false);
+  }
+  async function saveFields(event: FormEvent) {
+    event.preventDefault();
+    if (!idea) return;
+    await fetch("/api/startup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: idea.id, problem: draft.problem, targetUser: draft.targetUser, experiment: draft.experiment, nextValidation: draft.experiment }) });
     await refresh();
   }
-  return <><Heading eyebrow="Startup Lab" title="A portfolio of ideas, not one bet" copy="Every idea keeps its own problem, user, evidence state, confidence, and next validation step." action={<button className="primary" onClick={() => setAdding(true)}>+ Add idea</button>} />
+  async function chat(event: FormEvent) {
+    event.preventDefault();
+    if (!idea || !note.trim()) return;
+    setBusy("Davos is thinking…");
+    const response = await fetch("/api/startup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: idea.id, message: note }) });
+    const result = await response.json() as { messages?: Record<string, unknown>[]; error?: string };
+    setBusy(response.ok ? "" : result.error ?? "Chat failed");
+    setNote("");
+    if (response.ok) {
+      setMessages(result.messages ?? []);
+      await refresh();
+    }
+  }
+  async function research() {
+    if (!idea) return;
+    setBusy("Davos is researching…");
+    const response = await fetch("/api/startup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: idea.id, research: true }) });
+    const result = await response.json() as { error?: string };
+    setBusy(response.ok ? "" : result.error ?? "Research failed");
+    if (response.ok) await refresh();
+  }
+  if (idea) {
+    return <><Heading eyebrow="Startup Lab" title={String(idea.title)} copy="Talk the idea into something you can test. Davos updates the brief as you answer." action={<button onClick={() => setSelectedId(null)}>All ideas</button>} />
+      <div className="workspace-split">
+        <form className="box idea-brief" onSubmit={saveFields}>
+          <div className="between"><span className="pill">{statusLabel(String(idea.state))}</span><strong>{String(idea.confidence)}%</strong></div>
+          <label>Problem<textarea value={draft.problem} onChange={event => setDraft({ ...draft, problem: event.target.value })} /></label>
+          <label>Target user<input value={draft.targetUser} onChange={event => setDraft({ ...draft, targetUser: event.target.value })} /></label>
+          <label>Next experiment<textarea value={draft.experiment} onChange={event => setDraft({ ...draft, experiment: event.target.value })} /></label>
+          {asList(idea.evidence_json).length > 0 && <ul className="evidence">{asList(idea.evidence_json).map(item => <li key={item}>{item}</li>)}</ul>}
+          <div className="actions"><button className="primary">Save brief</button><button type="button" onClick={() => void research()}>Ask Davos to research</button></div>
+        </form>
+        <section className="box chat-pane">
+          <div className="chat-head"><strong>Davos</strong><small>Builder · asks one sharp question at a time</small></div>
+          <div className="chat-log">{messages.map(item => <div key={String(item.id)} className={String(item.role)}><b>{item.role === "agent" ? "Davos" : "You"}</b><p>{String(item.content)}</p></div>)}{messages.length === 0 && <p className="empty-line">Start with who hurts, and what breaks for them today.</p>}</div>
+          <form className="chat-compose" onSubmit={chat}><textarea value={note} onChange={event => setNote(event.target.value)} placeholder="The idea is for people who…" /><button className="primary" disabled={!note.trim() || Boolean(busy)}>Send</button></form>
+          {busy && <small className="config-message">{busy}</small>}
+        </section>
+      </div>
+    </>;
+  }
+  return <><Heading eyebrow="Startup Lab" title="A portfolio of ideas, not one bet" copy="Open an idea and talk it into a problem, a user, and a test. Davos will not send outreach or invent traction." action={<button className="primary" onClick={() => setAdding(true)}>+ Add idea</button>} />
     {adding && <form className="box inline-form" onSubmit={submit}><div className="between"><h2>Capture a new idea</h2><button type="button" className="icon-button" onClick={() => setAdding(false)}>×</button></div><label>Idea title<input required value={title} onChange={event => setTitle(event.target.value)} /></label><label>Problem statement<textarea value={problem} onChange={event => setProblem(event.target.value)} /></label><label>Target user<input value={targetUser} onChange={event => setTargetUser(event.target.value)} /></label><button className="primary">Add to lab</button></form>}
-    <div className="idea-grid">{data.startupIdeas.map(idea => <article className="box idea-workspace" key={String(idea.id)}><div className="between"><span className="pill">{statusLabel(String(idea.state))}</span><strong>{String(idea.confidence)}% confidence</strong></div><h2>{String(idea.title)}</h2><dl><div><dt>Problem</dt><dd>{String(idea.problem)}</dd></div><div><dt>Target user</dt><dd>{String(idea.target_user)}</dd></div><div><dt>Next validation</dt><dd>{String(idea.next_validation || idea.experiment)}</dd></div></dl>{asList(idea.evidence_json).length > 0 && <ul className="evidence">{asList(idea.evidence_json).map(item => <li key={item}>{item}</li>)}</ul>}{asList(idea.citations_json).length > 0 && <small>Citations: {asList(idea.citations_json).join(" · ")}</small>}<div className="idea-foot"><small>Review {formatDate(String(idea.review_date))}</small><div className="actions"><button onClick={() => void research(String(idea.id))}>Run research</button><select value={String(idea.state)} onChange={event => mutate("update_startup", { id: idea.id, state: event.target.value })}>{["captured","framing","researching","validating","parked","committed"].map(state => <option key={state} value={state}>{statusLabel(state)}</option>)}</select></div></div></article>)}</div>
+    <div className="idea-grid">{data.startupIdeas.map(item => <button className="box idea-workspace idea-open" key={String(item.id)} onClick={() => setSelectedId(String(item.id))}><div className="between"><span className="pill">{statusLabel(String(item.state))}</span><strong>{String(item.confidence)}%</strong></div><h2>{String(item.title)}</h2><p>{String(item.problem)}</p><small>Open with Davos →</small></button>)}</div>
   </>;
 }
 
@@ -480,6 +601,7 @@ function ContentPage({ data, mutate, refresh }: { data: WorkspaceData; mutate: (
   const active = data.contentIdeas.filter(item => item.status !== "parked");
   const strategy = data.contentStrategy[0];
   const [thesis, setThesis] = useState(String(strategy?.thesis ?? ""));
+  const [setupOpen, setSetupOpen] = useState(!String(strategy?.thesis ?? "").trim());
   async function generate(id: string, mode: "outline" | "draft") {
     const response = await fetch("/api/content", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, generate: mode }) });
     if (!response.ok) {
@@ -495,19 +617,38 @@ function ContentPage({ data, mutate, refresh }: { data: WorkspaceData; mutate: (
       const result = await response.json() as { error?: string };
       throw new Error(result.error ?? "Strategy could not be saved");
     }
+    setSetupOpen(false);
     await refresh();
   }
   return <><Heading eyebrow="Content" title="Choose the three ideas worth advancing" copy="The strategy remains authoritative. Outlines use mini; full drafts use gpt-4.1 and stay local until you copy them out." />
     <article className="box strategy-banner"><div><span className="label">CONTENT STRATEGY · {strategy?.source_name ? statusLabel(String(strategy.source_name)) : "Working thesis"}</span><h2>{String(strategy?.thesis ?? "Practical thinking on AI products, agentic workflows, and building with high ownership.")}</h2></div><span className="state-chip">{strategy?.source_name ? "Connected" : "Working thesis"}</span></article>
-    <form className="box inline-form" onSubmit={importStrategy}><label>Import or replace strategy<textarea value={thesis} onChange={event => setThesis(event.target.value)} placeholder="Paste the authoritative content strategy here." /><button className="primary">Save strategy</button></label></form>
+    <SetupPanel title="Samwell · Content strategy" hint="Injected into outline and draft prompts" open={setupOpen} onOpenChange={setSetupOpen}>
+      <form className="box inline-form" onSubmit={importStrategy}><label>Import or replace strategy<textarea value={thesis} onChange={event => setThesis(event.target.value)} placeholder="Paste the authoritative content strategy here." /><button className="primary">Save strategy</button></label></form>
+    </SetupPanel>
     <div className="content-top">{active.slice(0,3).map((idea,index) => <article className="box content-card" key={String(idea.id)}><div className="between"><span className="priority-number">0{index+1}</span><strong className="content-score">{String(idea.score)}</strong></div><span className="label">{String(idea.pillar)} · {statusLabel(String(idea.status))}</span><h2>{String(idea.title)}</h2><p><b>Why now:</b> {String(idea.source)}</p><small>Next: {String(idea.next_action)}</small>{asList(idea.outline_json).length > 0 && <ul className="evidence">{asList(idea.outline_json).map(item => <li key={item}>{item}</li>)}</ul>}{idea.draft_text ? <pre className="variant-preview">{String(idea.draft_text).slice(0, 420)}</pre> : null}<div className="actions"><button className="primary" onClick={() => void generate(String(idea.id), "outline")}>Outline</button><button onClick={() => void generate(String(idea.id), "draft")}>Draft</button><button onClick={() => mutate("update_content", { id: idea.id, status: "selected" })}>Select</button><button onClick={() => mutate("update_content", { id: idea.id, status: "parked" })}>Park</button></div></article>)}</div>
     <article className="box"><span className="label">FULL IDEA BACKLOG · {data.contentIdeas.length}</span><div className="backlog">{data.contentIdeas.map(idea => <div key={String(idea.id)}><strong>{String(idea.title)}</strong><span>{String(idea.pillar)}</span><em>{statusLabel(String(idea.status))}</em><b>{String(idea.score)}</b></div>)}</div></article>
   </>;
 }
 
 function MemoryPage({ goals, data, mutate, refresh }: { goals: Goal[]; data: WorkspaceData; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>; refresh: () => Promise<void> }) {
-  const [adding, setAdding] = useState(false); const [decision, setDecision] = useState(""); const [rationale, setRationale] = useState(""); const [preview, setPreview] = useState("");
+  const [adding, setAdding] = useState(false); const [decision, setDecision] = useState(""); const [rationale, setRationale] = useState("");
   const [editing, setEditing] = useState<Record<string, unknown> | null>(null);
+  const [documents, setDocuments] = useState<Record<string, unknown>[]>([]);
+  const [activeId, setActiveId] = useState("goals");
+  const [draft, setDraft] = useState("");
+  const [mode, setMode] = useState<"read" | "edit">("read");
+  const load = async () => {
+    const result = await fetch("/api/memory").then(response => response.json()) as { documents?: Record<string, unknown>[] };
+    const next = result.documents ?? [];
+    setDocuments(next);
+    const current = next.find(item => item.id === activeId) ?? next[0];
+    if (current) {
+      setActiveId(String(current.id));
+      setDraft(String(current.body ?? ""));
+    }
+  };
+  useEffect(() => { void load(); }, [data.decisions.length, data.jobs.length, goals.length]);
+  const active = documents.find(item => item.id === activeId);
   async function submit(event: FormEvent) { event.preventDefault(); await mutate("add_decision", { decision, rationale, affected: "General" }); setDecision(""); setRationale(""); setAdding(false); }
   async function saveEdit(event: FormEvent) {
     event.preventDefault();
@@ -522,29 +663,89 @@ function MemoryPage({ goals, data, mutate, refresh }: { goals: Goal[]; data: Wor
     if (!response.ok) throw new Error("Decision could not be removed");
     await refresh();
   }
-  const files = [["goals.md", `${goals.length} goals · ${goals.reduce((sum,goal)=>sum+goal.milestones.length,0)} milestones`, "Generated from structured goal state"], ["decisions.md", `${data.decisions.length} decisions`, "Append-only decision ledger"], ["career.md", `${data.jobs.length} tracked jobs`, "Career preferences and active state"], ["content-strategy.md", "Awaiting source", "Normalized strategy context"]];
-  const previews: Record<string,string> = {
-    "goals.md": goals.map(goal => `# ${goal.title}\nState: ${goal.state} | Progress: ${goal.progressPercentage}% | Target: ${goal.targetDate}\n\n${goal.milestones.map(item => `- [${item.completionPercentage === 100 ? "x" : " "}] ${item.title} — ${item.completionPercentage}% — due ${item.targetDate}`).join("\n")}`).join("\n\n"),
-    "decisions.md": data.decisions.map(item => `## ${String(item.decision)}\nDate: ${String(item.decided_at).slice(0,10)}\nWhy: ${String(item.rationale)}\nAffected: ${String(item.affected)}`).join("\n\n"),
-    "career.md": `# Career memory\n\nTarget: Senior / Lead AI Product roles\nPreferred: Bengaluru, Mumbai, or remote India\n\n## Active roles\n${data.jobs.map(job => `- ${String(job.title)} at ${String(job.company)} — ${String(job.fit_score)}% — ${String(job.status)}`).join("\n")}`,
-    "content-strategy.md": `# Content strategy\n\nStatus: ${data.contentStrategy[0]?.source_name ?? "Working thesis"}\n\n${String(data.contentStrategy[0]?.thesis ?? "Practical thinking on AI products, agentic workflows, and building with high ownership.")}`,
-  };
-  return <><Heading eyebrow="Memory" title="What the Operator remembers—and why" copy="Human-readable context remains inspectable while structured records keep workflows reliable." action={<button className="primary" onClick={() => setAdding(true)}>+ Record decision</button>} />
-    <div className="memory-files">{files.map(([name,meta,copy]) => <article className="box" key={name}><span className="file-mark">MD</span><h2>{name}</h2><p>{copy}</p><small>{meta}</small><button className="link" onClick={() => setPreview(name)}>Preview →</button></article>)}</div>
-    {preview && <article className="box context-panel"><div className="between"><div><span className="label">GENERATED CONTEXT</span><h2>{preview}</h2></div><button className="icon-button" onClick={() => setPreview("")}>×</button></div><pre>{previews[preview]}</pre></article>}
+  async function saveDocument() {
+    await fetch("/api/memory", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: activeId, body: draft }) });
+    setMode("read");
+    await load();
+  }
+  async function regenerate() {
+    await fetch("/api/memory", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: activeId, refresh: true }) });
+    setMode("read");
+    await load();
+  }
+  return <><Heading eyebrow="Memory" title="What the Operator remembers" copy="These notes are yours. Edit them. Refresh from live state only when you want a generated snapshot again." action={<button className="primary" onClick={() => setAdding(true)}>+ Record decision</button>} />
+    <div className="memory-layout">
+      <aside className="memory-nav">{documents.map(item => <button key={String(item.id)} className={item.id === activeId ? "active" : ""} onClick={() => { setActiveId(String(item.id)); setDraft(String(item.body ?? "")); setMode("read"); }}><strong>{String(item.title)}</strong><small>{item.source === "edited" ? "Edited" : "Generated"}</small></button>)}</aside>
+      <article className="box memory-reader">
+        <div className="between"><div><h2>{String(active?.title ?? "Select a file")}</h2><small>{active ? statusLabel(String(active.source)) : ""}</small></div><div className="actions">{mode === "read" ? <button onClick={() => setMode("edit")}>Edit</button> : <button className="primary" onClick={() => void saveDocument()}>Save</button>}<button onClick={() => void regenerate()}>Refresh from live state</button></div></div>
+        {mode === "edit" ? <textarea className="memory-editor" value={draft} onChange={event => setDraft(event.target.value)} /> : <Markdown value={draft} />}
+      </article>
+    </div>
     {adding && <form className="box inline-form" onSubmit={submit}><div className="between"><h2>Record a durable decision</h2><button type="button" className="icon-button" onClick={() => setAdding(false)}>×</button></div><label>Decision<input required value={decision} onChange={event => setDecision(event.target.value)} /></label><label>Why<textarea required value={rationale} onChange={event => setRationale(event.target.value)} /></label><button className="primary">Add to decisions.md</button></form>}
     {editing && <form className="box inline-form" onSubmit={saveEdit}><div className="between"><h2>Correct this decision</h2><button type="button" className="icon-button" onClick={() => setEditing(null)}>×</button></div><label>Decision<input required value={String(editing.decision ?? "")} onChange={event => setEditing({ ...editing, decision: event.target.value })} /></label><label>Why<textarea required value={String(editing.rationale ?? "")} onChange={event => setEditing({ ...editing, rationale: event.target.value })} /></label><button className="primary">Save correction</button></form>}
-    <article className="box"><span className="label">DECISION LEDGER</span><div className="decision-list">{data.decisions.map(item => <div key={String(item.id)}><time>{new Date(String(item.decided_at)).toLocaleDateString("en-IN", { day:"numeric", month:"short" })}</time><span><strong>{String(item.decision)}</strong><p>{String(item.rationale)}</p><small>{String(item.affected)}</small><div className="actions"><button className="link" onClick={() => setEditing(item)}>Correct</button><button className="link" onClick={() => void remove(String(item.id))}>Delete</button></div></span></div>)}</div></article>
+    <article className="box"><span className="label">Decision ledger</span><div className="decision-list">{data.decisions.map(item => <div key={String(item.id)}><time>{new Date(String(item.decided_at)).toLocaleDateString("en-IN", { day:"numeric", month:"short" })}</time><span><strong>{String(item.decision)}</strong><p>{String(item.rationale)}</p><small>{String(item.affected)}</small><div className="actions"><button className="link" onClick={() => setEditing(item)}>Correct</button><button className="link" onClick={() => void remove(String(item.id))}>Delete</button></div></span></div>)}</div></article>
   </>;
 }
 
 function CouncilPage({ data, mutate }: { data: WorkspaceData; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void> }) {
-  const proposed = data.councilProposals.filter(item => item.status === "proposed"); const [selectedRole, setSelectedRole] = useState<Record<string,unknown> | null>(null);
-  return <><Heading eyebrow="Small Council" title="Two roles, explicit authority" copy="Names make the roles memorable; missions, rubrics, tools, and approval boundaries determine their behaviour." action={<button className="primary" onClick={() => mutate("run_council")}>Run retrospective</button>} />
-    <div className="council-grid">{data.councilRoles.map(role => <article className="box role-card" key={String(role.id)}><div className="role-avatar">{String(role.label).slice(0,1)}</div><span className="pill">{statusLabel(String(role.status))}</span><h2>{String(role.label)}</h2><strong>{String(role.role_name)}</strong><p>{String(role.mission)}</p><small>{role.last_run_at ? `Last ran ${new Date(String(role.last_run_at)).toLocaleString("en-IN")}` : "Not run yet"}</small><button onClick={() => setSelectedRole(role)}>Inspect role brief</button></article>)}</div>
-    {selectedRole && <article className="box role-brief"><div className="between"><div><span className="label">VERSIONED ROLE BRIEF</span><h2>{String(selectedRole.label)} · {String(selectedRole.role_name)}</h2></div><button className="icon-button" onClick={() => setSelectedRole(null)}>×</button></div><div className="brief-columns"><div><strong>Mission</strong><p>{String(selectedRole.mission)}</p></div><div><strong>Allowed</strong><p>Read local goals, milestones, program state, calendar constraints, and accepted decisions. Produce structured proposals.</p></div><div><strong>Never automatic</strong><p>External messages, publishing, applications, permission changes, and permanent rule updates.</p></div></div></article>}
-    <article className="box"><span className="label">PROPOSALS NEEDING REVIEW · {proposed.length}</span><div className="proposal-list">{proposed.length ? proposed.map(item => <div key={String(item.id)}><span><strong>{String(item.title)}</strong><p>{String(item.rationale)}</p><small>Proposed by {String(item.role_id)}</small></span><div className="actions"><button className="primary" onClick={() => mutate("update_proposal", { id: item.id, status: "accepted" })}>Accept</button><button onClick={() => mutate("update_proposal", { id: item.id, status: "rejected" })}>Dismiss</button></div></div>) : <p className="empty-line">Run the retrospective to produce bounded, reviewable proposals.</p>}</div></article>
-    <article className="box honest-handoff"><span className="label">AI RUNTIME</span><h2>Proposals are structured; rules never write themselves</h2><p>The retrospective uses live goals, capacity, and ranked roles. With a key it uses gpt-4.1; otherwise local rules. Accepting a proposal records a decision. It never sends email, publishes, applies, or edits permissions.</p><Connector data={data} id="llm" /></article>
+  const proposed = data.councilProposals.filter(item => item.status === "proposed");
+  const [catalog, setCatalog] = useState<{ agents?: typeof OPERATOR_AGENTS; prompts?: Record<string, unknown>[]; preferences?: Record<string, unknown> } | null>(null);
+  const [selectedId, setSelectedId] = useState("tyrion");
+  const [promptId, setPromptId] = useState("daily_plan");
+  const [promptDraft, setPromptDraft] = useState("");
+  const [message, setMessage] = useState("");
+  async function load() {
+    const result = await fetch("/api/operator/prompts").then(response => response.json());
+    setCatalog(result);
+  }
+  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    const agent = OPERATOR_AGENTS.find(item => item.id === selectedId) ?? OPERATOR_AGENTS[0];
+    const rolePrompts = (catalog?.prompts ?? []).filter(item => item.role_id === agent.id);
+    const nextId = rolePrompts.some(item => item.id === promptId) ? promptId : agent.primaryTask;
+    if (nextId !== promptId) setPromptId(nextId);
+    const prompt = (catalog?.prompts ?? []).find(item => item.id === nextId);
+    if (prompt) setPromptDraft(String(prompt.system_prompt ?? ""));
+  }, [selectedId, catalog, promptId]);
+  const agent = OPERATOR_AGENTS.find(item => item.id === selectedId) ?? OPERATOR_AGENTS[0];
+  const rolePrompts = (catalog?.prompts ?? []).filter(item => item.role_id === agent.id);
+  const selectedPrompt = rolePrompts.find(item => item.id === promptId);
+  const prefs = catalog?.preferences as { career?: Record<string, unknown>; learning?: Record<string, unknown>; content?: Record<string, unknown> } | undefined;
+  const join = (value: unknown) => Array.isArray(value) && value.length ? value.map(String).join(", ") : "not set";
+  const preferenceCopy = agent.id === "varys"
+    ? `Roles: ${join(prefs?.career?.targetRoles)} · Locations: ${join(prefs?.career?.locations)} · Strengths: ${join(prefs?.career?.strengths)}`
+    : agent.id === "aemon"
+      ? `Tracks: ${join(prefs?.learning?.tracks)} · Interests: ${join(prefs?.learning?.interests)} · ${Number(prefs?.learning?.weeklyBudgetMinutes ?? 0)} min / week`
+      : agent.id === "samwell"
+        ? String(prefs?.content?.thesis ?? "Working thesis")
+        : agent.id === "davos"
+          ? "The open idea brief and chat history."
+          : "Live goals, calendar, and jobs from Today.";
+  async function savePrompt() {
+    const response = await fetch("/api/operator/prompts", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: promptId, systemPrompt: promptDraft }) });
+    const result = await response.json() as { message?: string; error?: string };
+    setMessage(result.message ?? result.error ?? "");
+    await load();
+  }
+  async function resetPrompt() {
+    await fetch("/api/operator/prompts", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: promptId, reset: true }) });
+    setMessage("Prompt restored to the default");
+    await load();
+  }
+  return <><Heading eyebrow="Small Council" title="Five agents, one operator" copy="Anyone can fork this. Edit the role prompt here. Career, learning, and content preferences are shown next to it and injected at runtime." action={<button className="primary" onClick={() => mutate("run_council")}>Run retrospective</button>} />
+    <div className="council-grid five">{OPERATOR_AGENTS.map(role => <button className={`box role-card ${role.id === selectedId ? "selected" : ""}`} key={role.id} onClick={() => setSelectedId(role.id)}><div className="role-avatar">{role.label.slice(0, 1)}</div><h2>{role.label}</h2><strong>{role.roleName}</strong><p>{role.program}</p></button>)}</div>
+    <article className="box role-brief">
+      <div className="between"><div><span className="agent-chip">{agent.label} · {agent.program}</span><h2>{agent.roleName}</h2><p>{agent.mission}</p></div></div>
+      <div className="brief-columns">
+        <div><strong>Never automatic</strong><p>{agent.never}</p></div>
+        <div><strong>Preferences in this prompt</strong><p>{preferenceCopy}</p></div>
+        <div><strong>Used when</strong><p>{String(selectedPrompt?.use_when ?? agent.primaryTask)}</p></div>
+      </div>
+      <div className="prompt-tabs">{rolePrompts.map(item => <button type="button" key={String(item.id)} className={item.id === promptId ? "active" : ""} onClick={() => setPromptId(String(item.id))}>{String(item.title)}</button>)}</div>
+      <label className="prompt-editor">System prompt<textarea value={promptDraft} onChange={event => setPromptDraft(event.target.value)} /></label>
+      <div className="actions"><button className="primary" onClick={() => void savePrompt()}>Save prompt</button><button onClick={() => void resetPrompt()}>Restore default</button>{message && <small className="config-message">{message}</small>}</div>
+    </article>
+    <article className="box"><span className="label">Proposals needing review · {proposed.length}</span><div className="proposal-list">{proposed.length ? proposed.map(item => <div key={String(item.id)}><span><strong>{String(item.title)}</strong><p>{String(item.rationale)}</p><small>Proposed by {String(item.role_id)}</small></span><div className="actions"><button className="primary" onClick={() => mutate("update_proposal", { id: item.id, status: "accepted" })}>Accept</button><button onClick={() => mutate("update_proposal", { id: item.id, status: "rejected" })}>Dismiss</button></div></div>) : <p className="empty-line">Run the retrospective to produce bounded, reviewable proposals.</p>}</div></article>
   </>;
 }
 

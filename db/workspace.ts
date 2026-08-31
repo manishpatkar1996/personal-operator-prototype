@@ -5,6 +5,9 @@ import { ensureContentColumns, getContentStrategy } from "./content";
 import { ensureJobColumns } from "./jobs";
 import { ensureLearningItemColumns } from "./learning-collect";
 import { ensureStartupColumns } from "./startup";
+import { ensureMemoryDocuments } from "./memory-docs";
+import { ensurePrompts } from "./prompts";
+import { ensureStartupChat } from "./startup-chat";
 import { syncLlmConnector } from "@/lib/operator/llm";
 
 function db() {
@@ -47,6 +50,9 @@ export async function ensureWorkspaceSchema() {
   await ensureLearningItemColumns();
   await ensureStartupColumns();
   await ensureContentColumns();
+  await ensurePrompts();
+  await ensureMemoryDocuments();
+  await ensureStartupChat();
   await syncLlmConnector();
 }
 
@@ -126,7 +132,7 @@ export async function getWorkspace() {
     rows("SELECT id,track_id,title,source,item_type,duration_minutes,status,relevance,url,summary FROM learning_items ORDER BY track_id,title"),
     rows("SELECT id,title,problem,target_user,state,next_validation,confidence,review_date,evidence_json,experiment,citations_json FROM startup_ideas ORDER BY review_date"),
     rows("SELECT id,title,pillar,status,score,source,next_action,outline_json,draft_text FROM content_ideas ORDER BY score DESC"),
-    rows("SELECT id,label,role_name,mission,status,last_run_at FROM council_roles ORDER BY id DESC"),
+    rows("SELECT id,label,role_name,mission,status,last_run_at,program,never_text,prompt_id FROM council_roles ORDER BY label"),
     rows("SELECT id,role_id,title,rationale,status,created_at FROM council_proposals ORDER BY created_at DESC"),
     rows("SELECT id,note,result,created_at FROM planning_notes ORDER BY created_at DESC LIMIT 10"),
     rows("SELECT id,name,status,detail,updated_at FROM connectors ORDER BY name"),
