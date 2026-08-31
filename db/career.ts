@@ -383,5 +383,14 @@ export async function saveCareerProfile(value: unknown): Promise<CareerProfile> 
     )
     .run();
 
-  return getCareerProfile();
+  const saved = await getCareerProfile();
+  if (input.resumeText !== undefined || input.strengths !== undefined || input.targetRoles !== undefined || input.exclusions !== undefined || input.industries !== undefined) {
+    try {
+      const { seedAemonFromCareerProfile } = await import("./learning-preferences");
+      await seedAemonFromCareerProfile(saved);
+    } catch {
+      /* Aemon taste is best-effort; career save should still succeed */
+    }
+  }
+  return saved;
 }

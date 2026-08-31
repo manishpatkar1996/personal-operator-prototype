@@ -126,8 +126,15 @@ export const learningItems = sqliteTable("learning_items", {
 export const startupIdeas = sqliteTable("startup_ideas", {
   id: text("id").primaryKey(),
   title: text("title").notNull(),
+  crispIdea: text("crisp_idea").notNull().default(""),
   problem: text("problem").notNull(),
   targetUser: text("target_user").notNull(),
+  scale: text("scale").notNull().default(""),
+  market: text("market").notNull().default(""),
+  competition: text("competition").notNull().default(""),
+  whyNow: text("why_now").notNull().default(""),
+  unfairAdvantage: text("unfair_advantage").notNull().default(""),
+  riskiestAssumption: text("riskiest_assumption").notNull().default(""),
   state: text("state").notNull().default("captured"),
   nextValidation: text("next_validation").notNull(),
   confidence: integer("confidence").notNull().default(20),
@@ -135,6 +142,8 @@ export const startupIdeas = sqliteTable("startup_ideas", {
   evidenceJson: text("evidence_json").notNull().default("[]"),
   experiment: text("experiment").notNull().default(""),
   citationsJson: text("citations_json").notNull().default("[]"),
+  thesis: text("thesis").notNull().default(""),
+  fieldClarityJson: text("field_clarity_json").notNull().default("{}"),
 });
 
 export const contentIdeas = sqliteTable("content_ideas", {
@@ -147,6 +156,11 @@ export const contentIdeas = sqliteTable("content_ideas", {
   nextAction: text("next_action").notNull(),
   outlineJson: text("outline_json").notNull().default("[]"),
   draftText: text("draft_text").notNull().default(""),
+  notesText: text("notes_text").notNull().default(""),
+  format: text("format").notNull().default("linkedin_post"),
+  generatedDraft: text("generated_draft").notNull().default(""),
+  workingNotes: text("working_notes").notNull().default(""),
+  feedbackText: text("feedback_text").notNull().default(""),
 }, table => [index("idx_content_status_score").on(table.status, table.score)]);
 
 export const contentStrategy = sqliteTable("content_strategy", {
@@ -154,6 +168,19 @@ export const contentStrategy = sqliteTable("content_strategy", {
   thesis: text("thesis").notNull(),
   sourceName: text("source_name").notNull().default(""),
   updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  formatsJson: text("formats_json").notNull().default("[\"linkedin_post\",\"medium_article\"]"),
+  voiceJson: text("voice_json").notNull().default("{}"),
+  linkedinCraftJson: text("linkedin_craft_json").notNull().default("{}"),
+  mediumCraftJson: text("medium_craft_json").notNull().default("{}"),
+  tasteJson: text("taste_json").notNull().default("[]"),
+});
+
+export const contentMessages = sqliteTable("content_messages", {
+  id: text("id").primaryKey(),
+  ideaId: text("idea_id").notNull(),
+  role: text("role").notNull(),
+  content: text("content").notNull(),
+  createdAt: text("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
 });
 
 export const councilRoles = sqliteTable("council_roles", {

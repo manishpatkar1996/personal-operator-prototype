@@ -17,6 +17,7 @@ const localBindingConfig = {
   vars: {
     ...(process.env.OPENAI_API_KEY ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY } : {}),
     ...(process.env.DEEPSEEK_API_KEY ? { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY } : {}),
+    ...(process.env.GOOGLE_CALENDAR_ICS_URL ? { GOOGLE_CALENDAR_ICS_URL: process.env.GOOGLE_CALENDAR_ICS_URL } : {}),
   },
   d1_databases: d1
     ? [

@@ -1,14 +1,18 @@
 import { env } from "cloudflare:workers";
 import { applyPlanningNote, retryCalendarWrite, slotForDuration } from "./calendar-slots";
+import { applyCalendarEvents, calendarFeedConfigured, refreshCalendarFromIcs, saveCalendarFeedUrl } from "./calendar-sync";
 import { ensureCareerExtraColumns } from "./career-actions";
 import { ensureContentColumns, getContentStrategy } from "./content";
+import { ensureContentChat } from "./content-chat";
 import { ensureJobColumns } from "./jobs";
 import { ensureLearningItemColumns } from "./learning-collect";
+import { ensureLearningPreferencesSchema } from "./learning-preferences";
 import { ensureStartupColumns } from "./startup";
 import { ensureMemoryDocuments } from "./memory-docs";
 import { ensurePrompts } from "./prompts";
 import { ensureStartupChat } from "./startup-chat";
 import { syncLlmConnector } from "@/lib/operator/llm";
+import { STARTUP_IDEA_SELECT, careerThesisSeed, composeStartupThesis, normalizeThesisFields, operatorThesisSeed, parseThesisClarity, thesisCompleteness, thesisFieldsFromRow } from "@/lib/operator/startup-thesis";
 
 function db() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
@@ -45,11 +49,21 @@ export async function ensureWorkspaceSchema() {
   if (!calendarColumns.has("external_event_id")) await database.prepare("ALTER TABLE calendar_blocks ADD COLUMN external_event_id TEXT").run();
   if (!calendarColumns.has("event_url")) await database.prepare("ALTER TABLE calendar_blocks ADD COLUMN event_url TEXT").run();
   if (!calendarColumns.has("last_synced_at")) await database.prepare("ALTER TABLE calendar_blocks ADD COLUMN last_synced_at TEXT").run();
+  const preferenceColumns = new Set((await database.prepare("PRAGMA table_info(calendar_preferences)").all<{ name: string }>()).results.map(column => column.name));
+  if (!preferenceColumns.has("ics_url")) await database.prepare("ALTER TABLE calendar_preferences ADD COLUMN ics_url TEXT NOT NULL DEFAULT ''").run();
+  await database.prepare("CREATE TABLE IF NOT EXISTS operator_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)").run();
+  const calendarPolicyRevision = await database.prepare("SELECT value FROM operator_meta WHERE key='calendar_policy_revision'").first<{ value: string }>();
+  if (Number(calendarPolicyRevision?.value ?? 0) < 1) {
+    await database.prepare("UPDATE calendar_preferences SET policy='auto_create',updated_at=CURRENT_TIMESTAMP WHERE id='primary' AND policy='propose_only'").run();
+    await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('calendar_policy_revision','1')").run();
+  }
   await ensureJobColumns();
   await ensureCareerExtraColumns();
   await ensureLearningItemColumns();
+  await ensureLearningPreferencesSchema();
   await ensureStartupColumns();
   await ensureContentColumns();
+  await ensureContentChat();
   await ensurePrompts();
   await ensureMemoryDocuments();
   await ensureStartupChat();
@@ -66,7 +80,7 @@ async function empty(table: string) {
 export async function seedWorkspace() {
   await ensureWorkspaceSchema();
   const database = db();
-  await database.prepare("INSERT OR IGNORE INTO calendar_preferences (id,policy,timezone,sync_window_days) VALUES ('primary','propose_only','Asia/Kolkata',7)").run();
+  await database.prepare("INSERT OR IGNORE INTO calendar_preferences (id,policy,timezone,sync_window_days) VALUES ('primary','auto_create','Asia/Kolkata',7)").run();
   if (await empty("decisions")) await database.batch([
     database.prepare("INSERT INTO decisions (id,decision,rationale,affected,decided_at) VALUES (?,?,?,?,?)").bind("dec-calendar", "Calendar work should live inside Today", "Scheduling is the execution layer for goals, not a separate destination.", "Today, Goals", "2026-08-31T10:00:00Z"),
     database.prepare("INSERT INTO decisions (id,decision,rationale,affected,decided_at) VALUES (?,?,?,?,?)").bind("dec-linkedin", "LinkedIn discovery is user-triggered and read-only", "The collection session must remain visible, cancellable, and safe.", "Career", "2026-08-31T10:05:00Z"),
@@ -93,10 +107,15 @@ export async function seedWorkspace() {
     database.prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance) VALUES (?,?,?,?,?,?,?,?)").bind("learn-model", "track-news", "This week in frontier model tooling", "Curated briefing", "Brief", 12, "recommended", "Material changes only; generic announcements removed."),
     database.prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance) VALUES (?,?,?,?,?,?,?,?)").bind("learn-story", "track-interview", "Tell the AI Product Operator story", "Operator exercise", "Exercise", 35, "recommended", "Turns the strongest proof point into a concise interview narrative."),
   ]);
-  if (await empty("startup_ideas")) await database.batch([
-    database.prepare("INSERT INTO startup_ideas (id,title,problem,target_user,state,next_validation,confidence,review_date) VALUES (?,?,?,?,?,?,?,?)").bind("idea-operator", "Personal AI Operator", "Goals, plans, information, and execution are fragmented across tools.", "Ambitious knowledge workers using multiple AI tools", "researching", "Interview five people about trust and calendar autonomy.", 36, "2026-09-07"),
-    database.prepare("INSERT INTO startup_ideas (id,title,problem,target_user,state,next_validation,confidence,review_date) VALUES (?,?,?,?,?,?,?,?)").bind("idea-career", "Career signal engine", "Job seekers cannot reliably distinguish high-fit roles from high-volume listings.", "Experienced product and AI candidates", "framing", "Test whether evidence-based fit explanations change application choices.", 20, "2026-09-10"),
-  ]);
+  if (await empty("startup_ideas")) {
+    const operator = operatorThesisSeed();
+    const career = normalizeThesisFields(careerThesisSeed());
+    const insert = database.prepare("INSERT INTO startup_ideas (id,title,crisp_idea,problem,target_user,scale,market,competition,why_now,unfair_advantage,riskiest_assumption,state,next_validation,confidence,review_date,thesis,experiment) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
+    await database.batch([
+      insert.bind("idea-operator", "Personal AI Operator", operator.idea, operator.problem, operator.targetUser, operator.scale, operator.market, operator.competition, operator.whyNow, operator.unfairAdvantage, operator.riskiestAssumption, "researching", operator.experiment, 36, "2026-09-07", composeStartupThesis(operator), operator.experiment),
+      insert.bind("idea-career", "Career signal engine", career.idea, career.problem, career.targetUser, career.scale, career.market, career.competition, career.whyNow, career.unfairAdvantage, career.riskiestAssumption, "framing", career.experiment, 20, "2026-09-10", composeStartupThesis(career), career.experiment),
+    ]);
+  }
   if (await empty("content_ideas")) await database.batch([
     database.prepare("INSERT INTO content_ideas (id,title,pillar,status,score,source,next_action) VALUES (?,?,?,?,?,?,?)").bind("content-goals", "Why personal AI agents need goals, not task lists", "Agentic products", "recommended", 94, "Operator build notes", "Review the prepared outline"),
     database.prepare("INSERT INTO content_ideas (id,title,pillar,status,score,source,next_action) VALUES (?,?,?,?,?,?,?)").bind("content-operator", "The difference between an assistant and an operator", "AI product thinking", "recommended", 89, "Product thesis", "Add one concrete before/after example"),
@@ -124,21 +143,27 @@ export async function getWorkspace() {
   const [decisions, calendar, calendarPreferences, calendarWriteRequests, emailSignals, jobs, tracks, learningItems, startupIdeas, contentIdeas, councilRoles, councilProposals, planningNotes, connectors, contentStrategy] = await Promise.all([
     rows("SELECT id,decision,rationale,affected,decided_at FROM decisions ORDER BY decided_at DESC"),
     rows("SELECT id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source,external_event_id,event_url,last_synced_at FROM calendar_blocks ORDER BY start_at"),
-    rows("SELECT id,policy,timezone,sync_window_days,updated_at FROM calendar_preferences WHERE id='primary'"),
+    rows("SELECT id,policy,timezone,sync_window_days,updated_at,CASE WHEN length(ics_url)>8 THEN 1 ELSE 0 END AS ics_configured FROM calendar_preferences WHERE id='primary'"),
     rows("SELECT id,block_id,action,status,payload_json,external_event_id,error,created_at,updated_at FROM calendar_write_requests ORDER BY created_at DESC LIMIT 50"),
     rows("SELECT id,thread_id,category,subject,sender,received_at,summary,next_action,due_at,status,message_url,last_synced_at FROM email_signals ORDER BY received_at DESC LIMIT 100"),
     rows("SELECT id,title,company,location,fit_score,status,source,next_action,url,fit_reason,evidence_json,follow_up_at,resume_variant FROM jobs ORDER BY fit_score DESC"),
     rows("SELECT id,name,purpose,weekly_budget_minutes,state,position FROM learning_tracks ORDER BY position"),
-    rows("SELECT id,track_id,title,source,item_type,duration_minutes,status,relevance,url,summary FROM learning_items ORDER BY track_id,title"),
-    rows("SELECT id,title,problem,target_user,state,next_validation,confidence,review_date,evidence_json,experiment,citations_json,thesis FROM startup_ideas ORDER BY review_date"),
-    rows("SELECT id,title,pillar,status,score,source,next_action,outline_json,draft_text,notes_text FROM content_ideas ORDER BY score DESC"),
+    rows("SELECT id,track_id,title,source,item_type,duration_minutes,status,relevance,url,summary,feedback FROM learning_items ORDER BY CASE status WHEN 'recommended' THEN 0 WHEN 'saved' THEN 1 ELSE 2 END, rowid DESC"),
+    rows(`SELECT ${STARTUP_IDEA_SELECT} FROM startup_ideas ORDER BY review_date`),
+    rows("SELECT id,title,pillar,status,score,source,next_action,outline_json,draft_text,notes_text,format,generated_draft,working_notes,feedback_text FROM content_ideas ORDER BY score DESC"),
     rows("SELECT id,label,role_name,mission,status,last_run_at,program,never_text,prompt_id FROM council_roles ORDER BY label"),
     rows("SELECT id,role_id,title,rationale,status,created_at FROM council_proposals ORDER BY created_at DESC"),
     rows("SELECT id,note,result,created_at FROM planning_notes ORDER BY created_at DESC LIMIT 10"),
     rows("SELECT id,name,status,detail,updated_at FROM connectors ORDER BY name"),
     getContentStrategy(),
   ]);
-  return { decisions, calendar, calendarPreferences, calendarWriteRequests, emailSignals, jobs, tracks, learningItems, startupIdeas, contentIdeas, councilRoles, councilProposals, planningNotes, connectors, contentStrategy: contentStrategy ? [contentStrategy] : [] };
+  if (await calendarFeedConfigured() && calendarPreferences[0]) calendarPreferences[0].ics_configured = 1;
+  const ideas = startupIdeas.map(idea => {
+    const fields = thesisFieldsFromRow(idea);
+    const completeness = thesisCompleteness(fields, parseThesisClarity(idea.field_clarity_json));
+    return { ...idea, thesis_complete: completeness.complete ? 1 : 0, thesis_clear_count: completeness.clear, thesis_filled_count: completeness.filled };
+  });
+  return { decisions, calendar, calendarPreferences, calendarWriteRequests, emailSignals, jobs, tracks, learningItems, startupIdeas: ideas, contentIdeas, councilRoles, councilProposals, planningNotes, connectors, contentStrategy: contentStrategy ? [contentStrategy] : [] };
 }
 
 export async function mutateWorkspace(action: string, data: Record<string, unknown>) {
@@ -230,34 +255,24 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
   if (action === "sync_calendar") {
     const events = Array.isArray(data.events) ? data.events.slice(0, 200) as Record<string, unknown>[] : [];
     const account = String(data.account ?? "Connected Google account");
-    const syncedAt = new Date().toISOString();
-    const syncStart = String(data.syncStart ?? events[0]?.startAt ?? syncedAt);
-    const syncEnd = String(data.syncEnd ?? events.at(-1)?.endAt ?? syncedAt);
-    const existing = await database.prepare("SELECT id,external_event_id,ownership FROM calendar_blocks WHERE source='google_calendar' AND start_at>=? AND start_at<?").bind(syncStart, syncEnd).all<{ id: string; external_event_id: string; ownership: string }>();
-    const existingByExternalId = new Map(existing.results.map(item => [item.external_event_id, item]));
-    const activeIds = new Set(events.map(event => String(event.id ?? "")));
-    const statements = events.map(event => {
-      const externalId = String(event.id ?? "").trim();
-      const title = String(event.title ?? "Untitled event").trim();
-      const startAt = String(event.startAt ?? "");
-      const endAt = String(event.endAt ?? "");
-      if (!externalId || !startAt || !endAt) throw new Error("Calendar events require an id, start, and end");
-      const previous = existingByExternalId.get(externalId);
-      const ownership = previous?.ownership === "operator_created" ? "operator_created" : event.ownership === "external_fixed" ? "external_fixed" : event.ownership === "operator_created" ? "operator_created" : "calendar_owned";
-      const blockId = previous?.id ?? `gcal:${externalId}`;
-      return database.prepare("INSERT OR REPLACE INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source,external_event_id,event_url,last_synced_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-        .bind(blockId, title, null, null, startAt, endAt, "synced", ownership, "google_calendar", externalId, String(event.url ?? ""), syncedAt);
-    });
-    for (const item of existing.results) if (item.external_event_id && !activeIds.has(item.external_event_id)) statements.push(database.prepare("DELETE FROM calendar_blocks WHERE id=? AND ownership!='operator_created'").bind(item.id));
-    await database.prepare("DELETE FROM calendar_blocks WHERE source='sample' OR id LIKE 'cal-%'").run();
-    if (statements.length) await database.batch(statements);
-    await database.prepare("UPDATE connectors SET status='connected',detail=?,updated_at=? WHERE id='google-calendar'")
-      .bind(`${account} · ${events.length} events synced · refreshes automatically`, syncedAt).run();
-    return { message: `Google Calendar refreshed — ${events.length} events synced` };
+    const mapped = events.map(event => ({
+      id: String(event.id ?? "").trim(),
+      title: String(event.title ?? "Untitled event").trim(),
+      startAt: String(event.startAt ?? ""),
+      endAt: String(event.endAt ?? ""),
+      url: String(event.url ?? ""),
+      ownership: "external_fixed" as const,
+    }));
+    if (mapped.some(event => !event.id || !event.startAt || !event.endAt)) throw new Error("Calendar events require an id, start, and end");
+    const syncStart = String(data.syncStart ?? mapped[0]?.startAt ?? new Date().toISOString());
+    const syncEnd = String(data.syncEnd ?? mapped.at(-1)?.endAt ?? new Date().toISOString());
+    return applyCalendarEvents(mapped, account, syncStart, syncEnd);
   }
   if (action === "request_calendar_sync") {
-    await database.prepare("UPDATE connectors SET status='sync_requested',detail='A refresh has been requested and will run with the calendar worker.',updated_at=CURRENT_TIMESTAMP WHERE id='google-calendar'").run();
-    return { message: "Calendar refresh requested" };
+    return refreshCalendarFromIcs();
+  }
+  if (action === "connect_calendar_ics") {
+    return saveCalendarFeedUrl(String(data.icsUrl ?? ""));
   }
   if (action === "complete_calendar_write") {
     const requestId = String(data.requestId ?? "");
@@ -329,7 +344,15 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
   if (action === "add_startup") {
     const title = String(data.title ?? "").trim();
     if (!title) throw new Error("Idea title is required");
-    await database.prepare("INSERT INTO startup_ideas (id,title,problem,target_user,state,next_validation,confidence,review_date) VALUES (?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(), title, String(data.problem ?? "Problem statement needs framing."), String(data.targetUser ?? "Target user needs framing."), "captured", "Confirm the problem, target user, and riskiest assumption.", 10, String(data.reviewDate ?? "2026-09-14")).run();
+    const fields = normalizeThesisFields({
+      idea: title,
+      problem: String(data.problem ?? ""),
+      targetUser: String(data.targetUser ?? ""),
+      experiment: "Confirm the problem, target user, and riskiest assumption.",
+    });
+    const thesis = composeStartupThesis(fields);
+    await database.prepare("INSERT INTO startup_ideas (id,title,crisp_idea,problem,target_user,scale,market,competition,why_now,unfair_advantage,riskiest_assumption,state,next_validation,confidence,review_date,thesis,experiment) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+      .bind(crypto.randomUUID(), title, fields.idea, fields.problem, fields.targetUser, fields.scale, fields.market, fields.competition, fields.whyNow, fields.unfairAdvantage, fields.riskiestAssumption, "captured", fields.experiment, 10, String(data.reviewDate ?? "2026-09-14"), thesis, fields.experiment).run();
     return { message: "Idea added" };
   }
   if (action === "update_startup") {

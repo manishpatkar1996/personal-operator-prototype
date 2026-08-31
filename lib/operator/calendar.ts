@@ -160,3 +160,90 @@ export function parsePlanningNote(note: string, from = new Date()) {
     .slice(0, 72) || text.slice(0, 72);
   return { title, durationMinutes, dayOffset, hour, minute, raw: text };
 }
+
+export type TimelineBlock = {
+  id?: unknown;
+  title?: unknown;
+  state?: unknown;
+  source?: unknown;
+  start_at?: unknown;
+  startAt?: unknown;
+};
+
+function blockStart(block: TimelineBlock) {
+  return String(block.start_at ?? block.startAt ?? "");
+}
+
+export function isDismissedTimelineBlock(block: TimelineBlock) {
+  return String(block.state ?? "") === "dismissed";
+}
+
+export function visibleTimelineBlocks<T extends TimelineBlock>(blocks: T[]): T[] {
+  const live = blocks.filter(block => !isDismissedTimelineBlock(block));
+  const ranked = [...live].sort((left, right) => {
+    const sourceRank = (item: T) => String(item.source) === "google_calendar" ? 0 : 1;
+    const stateRank = (item: T) => {
+      const state = String(item.state ?? "");
+      if (state === "synced" || state === "scheduled") return 0;
+      if (state === "proposed" || state === "approved_pending") return 2;
+      return 1;
+    };
+    return sourceRank(left) - sourceRank(right) || stateRank(left) - stateRank(right);
+  });
+  const seen = new Set<string>();
+  const next: T[] = [];
+  for (const block of ranked) {
+    const key = `${String(block.title ?? "").trim().toLowerCase()}|${blockStart(block).slice(0, 16)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(block);
+  }
+  return next.sort((left, right) => {
+    const a = Date.parse(blockStart(left)) || 0;
+    const b = Date.parse(blockStart(right)) || 0;
+    if (a !== b) return a - b;
+    return blockStart(left).localeCompare(blockStart(right));
+  });
+}
+
+export type CalendarReadKind = "live" | "stale" | "offline";
+
+export type CalendarReadStatus = {
+  kind: CalendarReadKind;
+  label: string;
+  detail: string;
+};
+
+export function calendarReadStatus(input: {
+  icsConfigured: boolean;
+  connectorStatus?: string;
+  googleEventCount: number;
+  todayBlockCount: number;
+}): CalendarReadStatus {
+  const { icsConfigured, googleEventCount, todayBlockCount } = input;
+  if (icsConfigured) {
+    return {
+      kind: "live",
+      label: "Google read is live",
+      detail: todayBlockCount
+        ? `${todayBlockCount} block${todayBlockCount === 1 ? "" : "s"} today · read-only · writes still queue`
+        : "Read-only iCal · writes still queue",
+    };
+  }
+  if (googleEventCount > 0) {
+    return {
+      kind: "stale",
+      label: "Reconnect feed",
+      detail: `${googleEventCount} previously synced event${googleEventCount === 1 ? "" : "s"} · paste a secret iCal URL to keep busy/free live`,
+    };
+  }
+  return {
+    kind: "offline",
+    label: "Reconnect feed",
+    detail: "Paste a secret iCal URL to read Google events. Writes still queue.",
+  };
+}
+
+export function calendarControlsStartOpen(icsConfigured: boolean, hasGoogleEventsToday: boolean) {
+  return !icsConfigured && !hasGoogleEventsToday;
+}

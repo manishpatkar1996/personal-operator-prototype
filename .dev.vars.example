@@ -1,5 +1,7 @@
 OPENAI_API_KEY=
 DEEPSEEK_API_KEY=
+# Optional. Secret iCal URL from Google Calendar → Settings → Integrate calendar.
+# GOOGLE_CALENDAR_ICS_URL=
 # Optional per-task overrides. Defaults live in lib/operator/models.ts
 # OPERATOR_MODEL_DAILY_PLAN=gpt-4.1-nano
 # OPERATOR_MODEL_COUNCIL=gpt-4.1

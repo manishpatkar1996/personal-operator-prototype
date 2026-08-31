@@ -1,5 +1,5 @@
 import { addStartupNote, chatStartupIdea, listStartupMessages, listStartupNotes, updateStartupIdea } from "@/db/startup-chat";
-import { researchStartupIdea } from "@/db/startup";
+import { researchStartupIdea, validateStartupThesis } from "@/db/startup";
 
 export const dynamic = "force-dynamic";
 
@@ -23,6 +23,7 @@ export async function POST(request: Request) {
     const body = await request.json() as Record<string, unknown>;
     const id = String(body.id ?? "");
     if (body.research === true) return Response.json(await researchStartupIdea(id));
+    if (body.validate === true) return Response.json(await validateStartupThesis(id));
     if (typeof body.note === "string") return Response.json(await addStartupNote(id, String(body.title ?? "Research note"), body.note));
     if (typeof body.message === "string") return Response.json(await chatStartupIdea(id, body.message));
     return Response.json(await updateStartupIdea(id, body));

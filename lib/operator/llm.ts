@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { DEFAULT_PROMPTS } from "./agents.ts";
+import { formatStrategyForPrompt, parseLinkedInCraft, parseMediumCraft, parseTasteLog, parseVoice } from "./content-craft.ts";
 import { deepseekModelFor, liveProviderOrder, modelFor, type OperatorTask } from "./models.ts";
 import { composeLiveSystemPrompt } from "./system-prompt.ts";
 
@@ -39,7 +40,7 @@ export function deepseekConfigured() {
 }
 
 export function liveModelsConfigured() {
-  return openaiConfigured() || deepseekConfigured();
+  return liveProviderOrder(openaiConfigured(), deepseekConfigured()).length > 0;
 }
 
 async function storedPrompt(task: string) {
@@ -69,15 +70,40 @@ async function preferenceContext(task: OperatorTask) {
       if (!row) return "";
       return `\nLive career preferences:\nTarget roles: ${readJsonList(row.target_roles_json).join(", ") || "not set"}\nLocations: ${readJsonList(row.locations_json).join(", ") || "not set"}\nWork modes: ${readJsonList(row.work_modes_json).join(", ") || "not set"}\nStrengths: ${readJsonList(row.strengths_json).join(", ") || "not set"}\nExclude: ${readJsonList(row.exclusions_json).join(", ") || "not set"}`;
     }
-    if (task === "learning_summarize") {
-      const row = await env.DB.prepare("SELECT tracks_json,interests_json,weekly_budget_minutes FROM learning_preferences LIMIT 1").first<Record<string, string | number>>();
+    if (task === "learning_summarize" || task === "learning_select") {
+      const row = await env.DB.prepare("SELECT tracks_json,interests_json,want_json,avoid_json,taste_notes,weekly_budget_minutes FROM learning_preferences LIMIT 1").first<Record<string, string | number>>();
       if (!row) return "";
-      return `\nLive learning preferences:\nTracks: ${readJsonList(String(row.tracks_json)).join(", ") || "not set"}\nInterests: ${readJsonList(String(row.interests_json)).join(", ") || "not set"}\nWeekly budget: ${Number(row.weekly_budget_minutes ?? 0)} minutes`;
+      const list = (value: unknown) => {
+        try {
+          const parsed: unknown = JSON.parse(String(value ?? "[]"));
+          return Array.isArray(parsed) ? parsed.map(String).filter(Boolean) : [];
+        } catch {
+          return [];
+        }
+      };
+      return `\nLive learning preferences:\nTracks: ${list(row.tracks_json).join(", ") || "not set"}\nInterests: ${list(row.interests_json).join(", ") || "not set"}\nWant more of: ${list(row.want_json).join(", ") || "not set yet"}\nSkip: ${list(row.avoid_json).join(", ") || "not set"}\nWeekly budget: ${Number(row.weekly_budget_minutes ?? 0)} minutes${row.taste_notes ? `\nRecent feedback:\n${String(row.taste_notes)}` : ""}`;
     }
-    if (task === "content_outline" || task === "content_draft") {
-      const row = await env.DB.prepare("SELECT thesis,source_name FROM content_strategy WHERE id='primary'").first<{ thesis: string; source_name: string }>();
+    if (task === "content_notes" || task === "content_outline" || task === "content_draft" || task === "content_chat") {
+      const row = await env.DB.prepare("SELECT thesis,source_name,voice_json,linkedin_craft_json,medium_craft_json,taste_json FROM content_strategy WHERE id='primary'").first<{
+        thesis: string;
+        source_name: string;
+        voice_json: string;
+        linkedin_craft_json: string;
+        medium_craft_json: string;
+        taste_json: string;
+      }>();
       if (!row) return "";
-      return `\nLive content strategy (${row.source_name}):\n${row.thesis}`;
+      const parse = (value: string) => {
+        try { return JSON.parse(value || "") as unknown; } catch { return {}; }
+      };
+      return `\n${formatStrategyForPrompt({
+        thesis: row.thesis,
+        sourceName: row.source_name,
+        voice: parseVoice(parse(row.voice_json)),
+        linkedinCraft: parseLinkedInCraft(parse(row.linkedin_craft_json)),
+        mediumCraft: parseMediumCraft(parse(row.medium_craft_json)),
+        taste: parseTasteLog(parse(row.taste_json)),
+      })}`;
     }
   } catch {
     return "";
@@ -145,7 +171,7 @@ export async function completeJson(task: OperatorTask, system: string, user: str
     }
   }
 
-  if (!errors.length) throw new Error("No model key is configured. Add OPENAI_API_KEY or DEEPSEEK_API_KEY to .dev.vars.");
+  if (!errors.length) throw new Error("Live models are paused, or no model key is configured. Add OPENAI_API_KEY or DEEPSEEK_API_KEY to .dev.vars.");
   throw new Error(errors.join(" Then "));
 }
 
@@ -161,6 +187,6 @@ export async function syncLlmConnector() {
       ? "OpenAI is configured. Add DEEPSEEK_API_KEY to .dev.vars for a live fallback."
       : deepseek
         ? "DeepSeek is the live model. OpenAI is paused."
-        : "Local rules and seeded results are active; live research requires a model key.";
+        : "Live models are paused. Local rules and seeded results are active.";
   await env.DB.prepare("UPDATE connectors SET status=?,detail=?,updated_at=CURRENT_TIMESTAMP WHERE id='llm'").bind(status, detail).run();
 }

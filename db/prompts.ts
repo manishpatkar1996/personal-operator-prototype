@@ -42,6 +42,32 @@ export async function ensurePrompts() {
     }
     await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('prompt_revision','2')").run();
   }
+  if (Number((await database.prepare("SELECT value FROM operator_meta WHERE key='prompt_revision'").first<{ value: string }>())?.value ?? 0) < 4) {
+    for (const prompt of DEFAULT_PROMPTS) {
+      await database.prepare("INSERT OR IGNORE INTO operator_prompts (id,role_id,title,use_when,system_prompt) VALUES (?,?,?,?,?)")
+        .bind(prompt.id, prompt.roleId, prompt.title, prompt.useWhen, prompt.systemPrompt).run();
+      await database.prepare("UPDATE operator_prompts SET role_id=?,title=?,use_when=?,system_prompt=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(prompt.roleId, prompt.title, prompt.useWhen, prompt.systemPrompt, prompt.id).run();
+    }
+    await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('prompt_revision','4')").run();
+  }
+  if (Number((await database.prepare("SELECT value FROM operator_meta WHERE key='prompt_revision'").first<{ value: string }>())?.value ?? 0) < 5) {
+    for (const prompt of DEFAULT_PROMPTS.filter(item => item.roleId === "samwell")) {
+      await database.prepare("INSERT OR IGNORE INTO operator_prompts (id,role_id,title,use_when,system_prompt) VALUES (?,?,?,?,?)")
+        .bind(prompt.id, prompt.roleId, prompt.title, prompt.useWhen, prompt.systemPrompt).run();
+      await database.prepare("UPDATE operator_prompts SET role_id=?,title=?,use_when=?,system_prompt=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(prompt.roleId, prompt.title, prompt.useWhen, prompt.systemPrompt, prompt.id).run();
+    }
+    await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('prompt_revision','5')").run();
+  }
+  if (Number((await database.prepare("SELECT value FROM operator_meta WHERE key='prompt_revision'").first<{ value: string }>())?.value ?? 0) < 6) {
+    const prompt = DEFAULT_PROMPTS.find(item => item.id === "resume_extract");
+    if (prompt) {
+      await database.prepare("UPDATE operator_prompts SET role_id=?,title=?,use_when=?,system_prompt=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(prompt.roleId, prompt.title, prompt.useWhen, prompt.systemPrompt, prompt.id).run();
+    }
+    await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('prompt_revision','6')").run();
+  }
 }
 
 export async function getPrompt(id: string) {
@@ -69,9 +95,20 @@ export async function listPrompts() {
     learning: learning ? {
       tracks: learning.preferences.tracks,
       interests: learning.preferences.interests,
+      want: learning.preferences.want,
+      avoid: learning.preferences.avoid,
       weeklyBudgetMinutes: learning.preferences.weeklyBudgetMinutes,
+      tasteNotes: learning.preferences.tasteNotes,
     } : null,
-    content: strategy ? { thesis: strategy.thesis, sourceName: strategy.source_name } : null,
+    content: strategy ? {
+      thesis: strategy.thesis,
+      sourceName: strategy.source_name,
+      formats: strategy.formats,
+      voice: strategy.voice,
+      linkedinCraft: strategy.linkedinCraft,
+      mediumCraft: strategy.mediumCraft,
+      taste: strategy.taste,
+    } : null,
   };
   return {
     agents: OPERATOR_AGENTS,

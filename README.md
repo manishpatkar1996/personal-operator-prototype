@@ -18,7 +18,9 @@ A local-first working prototype that turns goals and dated milestones into a dai
 
 Put `OPENAI_API_KEY` in gitignored `.dev.vars`. Add `DEEPSEEK_API_KEY` there too if you want DeepSeek as the live fallback when OpenAI is down or rate-limited. Per-task OpenAI routing lives in `lib/operator/models.ts`; fallback uses `deepseek-chat`.
 
-External services are not simulated. Google Calendar, Gmail, LinkedIn/Chrome collection, and live model research remain visibly unconnected until their credentials or user-approved handoffs are configured.
+Google Calendar read uses a secret iCal URL (`GOOGLE_CALENDAR_ICS_URL` or paste it in Calendar controls). Writes still queue until a write worker exists.
+
+External services are not simulated. Gmail, LinkedIn/Chrome collection, and live model research remain visibly unconnected until their credentials or user-approved handoffs are configured.
 
 ## Local development
 

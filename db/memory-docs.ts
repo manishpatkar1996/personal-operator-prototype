@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { MEMORY_NOTES, presentMemoryNote, sortMemoryNotes } from "@/lib/operator/memory-notes";
 import { listGoals } from "./goals";
 import { getCareerProfile } from "./career";
 import { getContentStrategy } from "./content";
@@ -65,36 +66,53 @@ ${strategy?.thesis ?? "Practical thinking on AI products, agentic workflows, and
   };
 }
 
+async function readMemoryRows() {
+  return (await db().prepare("SELECT id,title,body,source,updated_at FROM memory_documents ORDER BY id").all<Record<string, unknown>>()).results;
+}
+
+function presentRows(rows: Record<string, unknown>[], live: Partial<Awaited<ReturnType<typeof generateMemoryBodies>>>) {
+  return sortMemoryNotes(rows).map(row => presentMemoryNote(row, live[String(row.id) as keyof typeof live]));
+}
+
 export async function listMemoryDocuments() {
   await ensureMemoryDocuments();
-  const existing = (await db().prepare("SELECT id,title,body,source,updated_at FROM memory_documents ORDER BY id").all<Record<string, unknown>>()).results;
-  if (existing.length >= 4) return existing;
-  const generated = await generateMemoryBodies();
-  const seed = [
-    ["goals", "goals.md", generated.goals],
-    ["decisions", "decisions.md", generated.decisions],
-    ["career", "career.md", generated.career],
-    ["content-strategy", "content-strategy.md", generated["content-strategy"]],
-  ] as const;
-  await db().batch(seed.map(([id, title, body]) => db().prepare("INSERT OR IGNORE INTO memory_documents (id,title,body,source) VALUES (?,?,?,?)").bind(id, title, body, "generated")));
-  return (await db().prepare("SELECT id,title,body,source,updated_at FROM memory_documents ORDER BY id").all<Record<string, unknown>>()).results;
+  let rows = await readMemoryRows();
+  let live: Partial<Awaited<ReturnType<typeof generateMemoryBodies>>> = {};
+  try {
+    live = await generateMemoryBodies();
+  } catch {
+    live = {};
+  }
+  if (rows.length < 4) {
+    live = await generateMemoryBodies();
+    const seed = [
+      ["goals", MEMORY_NOTES.goals.title, live.goals],
+      ["career", MEMORY_NOTES.career.title, live.career],
+      ["content-strategy", MEMORY_NOTES["content-strategy"].title, live["content-strategy"]],
+      ["decisions", MEMORY_NOTES.decisions.title, live.decisions],
+    ] as const;
+    await db().batch(seed.map(([id, title, body]) => db().prepare("INSERT OR IGNORE INTO memory_documents (id,title,body,source) VALUES (?,?,?,?)").bind(id, title, body, "generated")));
+    rows = await readMemoryRows();
+  }
+  return presentRows(rows, live);
 }
 
 export async function saveMemoryDocument(id: string, body: string) {
   const text = body.trim();
-  if (!text) throw new Error("Document cannot be empty");
+  if (!text) throw new Error("Note cannot be empty");
   await ensureMemoryDocuments();
   const existing = await db().prepare("SELECT id FROM memory_documents WHERE id=?").bind(id).first<{ id: string }>();
-  if (!existing) throw new Error("Document was not found");
+  if (!existing) throw new Error("That note was not found");
   await db().prepare("UPDATE memory_documents SET body=?,source='edited',updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(text.slice(0, 20_000), id).run();
-  return { message: "Memory document saved" };
+  return { message: "Note saved" };
 }
 
 export async function refreshMemoryDocument(id: string) {
   const generated = await generateMemoryBodies();
   const body = generated[id as keyof typeof generated];
-  if (!body) throw new Error("That document cannot be regenerated");
+  if (!body) throw new Error("That note cannot be rebuilt from another view");
   await ensureMemoryDocuments();
   await db().prepare("UPDATE memory_documents SET body=?,source='generated',updated_at=CURRENT_TIMESTAMP WHERE id=?").bind(body, id).run();
-  return { message: "Document refreshed from live state" };
+  const from = MEMORY_NOTES[id as keyof typeof MEMORY_NOTES]?.fromLabel ?? "the current view";
+  return { message: `Updated this note from ${from}` };
 }

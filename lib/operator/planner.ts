@@ -123,7 +123,7 @@ export function buildDeterministicPlan(context: OperatorContext): OperatorPlan {
     .filter((candidate, index, all) => all.findIndex(item => item.domain === candidate.domain && item.title === candidate.title) === index)
     .slice(0, 3);
   const priorities: OperatorPlanPriority[] = selected.map((candidate, index) => ({
-    id: `priority-${candidate.sourceIds[0] ?? index + 1}`,
+    id: `priority-${index + 1}-${candidate.domain}-${candidate.milestoneId ?? candidate.sourceIds[0] ?? index + 1}`,
     rank: index + 1,
     domain: candidate.domain,
     title: candidate.title,
@@ -136,7 +136,7 @@ export function buildDeterministicPlan(context: OperatorContext): OperatorPlan {
     dueDate: candidate.dueDate,
   }));
   const actions: OperatorPlanAction[] = selected.map((candidate, index) => ({
-    id: `action-${candidate.sourceIds[0] ?? index + 1}`,
+    id: `action-${index + 1}-${candidate.domain}-${candidate.milestoneId ?? candidate.sourceIds[0] ?? index + 1}`,
     kind: candidate.actionKind,
     domain: candidate.domain,
     title: candidate.title,

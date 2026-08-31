@@ -25,7 +25,7 @@ export async function POST(request: Request) {
       return Response.json(await scheduleTopJob());
     }
     if (body.resumeVariant && typeof body.resumeVariant === "string") {
-      return Response.json(await generateResumeVariant(body.resumeVariant));
+      return Response.json(await generateResumeVariant(body.resumeVariant, { regenerate: body.regenerate === true }));
     }
     const followUp = body.followUp && typeof body.followUp === "object" ? body.followUp as Record<string, unknown> : null;
     if (followUp) {

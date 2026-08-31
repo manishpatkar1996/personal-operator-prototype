@@ -1,4 +1,6 @@
 import { env } from "cloudflare:workers";
+import { getCareerProfile } from "./career";
+import { DEFAULT_LEARNING_SOURCES, preferencesFromResume } from "@/lib/operator/learning-taste";
 
 const preferenceId = "primary";
 const maxListEntries = 24;
@@ -22,6 +24,9 @@ export type LearningSourceType = (typeof learningSourceTypes)[number];
 export type LearningPreferences = {
   tracks: string[];
   interests: string[];
+  want: string[];
+  avoid: string[];
+  tasteNotes: string;
   weeklyBudgetMinutes: number;
   createdAt: string;
   updatedAt: string;
@@ -41,6 +46,9 @@ export type LearningSource = {
 type PreferenceInput = {
   tracks?: unknown;
   interests?: unknown;
+  want?: unknown;
+  avoid?: unknown;
+  tasteNotes?: unknown;
   weeklyBudgetMinutes?: unknown;
 };
 
@@ -81,26 +89,53 @@ export async function ensureLearningPreferencesSchema() {
     database.prepare("CREATE UNIQUE INDEX IF NOT EXISTS idx_learning_sources_url ON learning_sources(url)"),
     database.prepare("CREATE INDEX IF NOT EXISTS idx_learning_sources_enabled_priority ON learning_sources(enabled, priority)"),
   ]);
+  const columns = new Set((await database.prepare("PRAGMA table_info(learning_preferences)").all<{ name: string }>()).results.map(column => column.name));
+  if (!columns.has("want_json")) await database.prepare("ALTER TABLE learning_preferences ADD COLUMN want_json TEXT NOT NULL DEFAULT '[]'").run();
+  if (!columns.has("avoid_json")) await database.prepare("ALTER TABLE learning_preferences ADD COLUMN avoid_json TEXT NOT NULL DEFAULT '[]'").run();
+  if (!columns.has("taste_notes")) await database.prepare("ALTER TABLE learning_preferences ADD COLUMN taste_notes TEXT NOT NULL DEFAULT ''").run();
   await database.prepare("INSERT OR IGNORE INTO learning_preferences (id) VALUES (?)").bind(preferenceId).run();
-  const current = await database.prepare("SELECT tracks_json,interests_json,weekly_budget_minutes FROM learning_preferences WHERE id=?")
-    .bind(preferenceId).first<Record<string, unknown>>();
-  if (current) {
-    const tracks = safeJsonList(current.tracks_json);
-    const interests = safeJsonList(current.interests_json);
-    const nextTracks = tracks.length ? tracks : ["Agentic AI", "AI news & research", "Product management"];
-    const nextInterests = interests.length ? interests : ["Memory", "tool use", "evaluations", "enterprise AI platforms"];
-    if (!tracks.length || !interests.length) {
-      await database.prepare("UPDATE learning_preferences SET tracks_json=?,interests_json=?,weekly_budget_minutes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
-        .bind(JSON.stringify(nextTracks), JSON.stringify(nextInterests), Number(current.weekly_budget_minutes) || 300, preferenceId)
-        .run();
+  for (const source of DEFAULT_LEARNING_SOURCES) {
+    await database.prepare("INSERT OR IGNORE INTO learning_sources (id,name,source_type,url,enabled,priority) VALUES (?,?,?,?,?,?)")
+      .bind(source.id, source.name, source.sourceType, source.url, 1, source.priority).run();
+  }
+  await database.prepare("UPDATE learning_sources SET url=?,source_type=?,updated_at=CURRENT_TIMESTAMP WHERE url=?")
+    .bind("https://simonwillison.net/atom/everything/", "rss", "https://simonwillison.net/").run();
+  await database.prepare("CREATE TABLE IF NOT EXISTS operator_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)").run();
+  const revision = await database.prepare("SELECT value FROM operator_meta WHERE key='aemon_resume_revision'").first<{ value: string }>();
+  if (Number(revision?.value ?? 0) < 2) {
+    const seeded = await applyResumeDerivedPreferences().catch(() => null);
+    if (seeded) {
+      await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('aemon_resume_revision','2')").run();
     }
   }
-  const sourceCount = await database.prepare("SELECT COUNT(*) AS count FROM learning_sources").first<{ count: number }>();
-  if ((sourceCount?.count ?? 0) === 0) {
-    await database.prepare("INSERT INTO learning_sources (id,name,source_type,url,enabled,priority) VALUES (?,?,?,?,?,?)")
-      .bind("source-simon", "Simon Willison", "website", "https://simonwillison.net/", 1, 4).run();
-  }
   await database.prepare("PRAGMA optimize").run();
+}
+
+function profileHasTaste(profile: { resumeText: string; strengths: string[]; targetRoles: string[] }) {
+  return profile.resumeText.trim().length > 80 || profile.strengths.length > 0 || profile.targetRoles.length > 0;
+}
+
+async function applyResumeDerivedPreferences(profile?: Awaited<ReturnType<typeof getCareerProfile>> | null) {
+  const source = profile ?? await getCareerProfile().catch(() => null);
+  if (!source || !profileHasTaste(source)) return null;
+  const derived = preferencesFromResume(source);
+  const current = await db().prepare("SELECT avoid_json FROM learning_preferences WHERE id=?").bind(preferenceId).first<{ avoid_json: string }>();
+  const avoid = [...new Map([...derived.avoid, ...safeJsonList(current?.avoid_json)].map(label => [label.toLocaleLowerCase(), label])).values()].slice(0, 16);
+  await db().prepare("UPDATE learning_preferences SET tracks_json=?,interests_json=?,avoid_json=?,weekly_budget_minutes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+    .bind(JSON.stringify(derived.tracks), JSON.stringify(derived.interests), JSON.stringify(avoid), derived.weeklyBudgetMinutes, preferenceId).run();
+  try {
+    await db().prepare("UPDATE learning_tracks SET name=?,purpose=? WHERE id='track-agentic'").bind("Agentic AI products", "Build shipping judgement on memory, tools, evals, and long-running agents.").run();
+    await db().prepare("UPDATE learning_tracks SET name=?,purpose=? WHERE id='track-news'").bind("Frontier models & tooling", "Material model, product, and research changes only — skip generic launch posts.").run();
+    await db().prepare("UPDATE learning_tracks SET name=?,purpose=? WHERE id='track-pm'").bind("AI product craft", "Strategy, discovery, and 0-to-1 platform work for AI product roles.").run();
+  } catch {
+    /* tracks table is created with the workspace seed */
+  }
+  return derived;
+}
+
+export async function seedAemonFromCareerProfile(profile?: Awaited<ReturnType<typeof getCareerProfile>> | null) {
+  await ensureLearningPreferencesSchema();
+  return applyResumeDerivedPreferences(profile);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -189,7 +224,7 @@ export async function getLearningConfiguration() {
   await ensureLearningPreferencesSchema();
   const database = db();
   const [preference, sources] = await Promise.all([
-    database.prepare("SELECT tracks_json,interests_json,weekly_budget_minutes,created_at,updated_at FROM learning_preferences WHERE id=?")
+    database.prepare("SELECT tracks_json,interests_json,want_json,avoid_json,taste_notes,weekly_budget_minutes,created_at,updated_at FROM learning_preferences WHERE id=?")
       .bind(preferenceId).first<Record<string, unknown>>(),
     database.prepare("SELECT id,name,source_type,url,enabled,priority,created_at,updated_at FROM learning_sources ORDER BY enabled DESC,priority DESC,name COLLATE NOCASE")
       .all<Record<string, unknown>>(),
@@ -199,6 +234,9 @@ export async function getLearningConfiguration() {
   const preferences: LearningPreferences = {
     tracks: safeJsonList(preference.tracks_json),
     interests: safeJsonList(preference.interests_json),
+    want: safeJsonList(preference.want_json),
+    avoid: safeJsonList(preference.avoid_json),
+    tasteNotes: String(preference.taste_notes ?? ""),
     weeklyBudgetMinutes: Number(preference.weekly_budget_minutes),
     createdAt: String(preference.created_at),
     updatedAt: String(preference.updated_at),
@@ -210,23 +248,31 @@ export async function updateLearningPreferences(input: unknown) {
   await ensureLearningPreferencesSchema();
   if (!isRecord(input)) throw new Error("Learning preferences must be an object");
   const data = input as PreferenceInput;
-  const current = await db().prepare("SELECT tracks_json,interests_json,weekly_budget_minutes FROM learning_preferences WHERE id=?")
+  const current = await db().prepare("SELECT tracks_json,interests_json,want_json,avoid_json,taste_notes,weekly_budget_minutes FROM learning_preferences WHERE id=?")
     .bind(preferenceId).first<Record<string, unknown>>();
   if (!current) throw new Error("Learning preferences are unavailable");
 
   const hasTracks = Object.hasOwn(data, "tracks");
   const hasInterests = Object.hasOwn(data, "interests");
+  const hasWant = Object.hasOwn(data, "want");
+  const hasAvoid = Object.hasOwn(data, "avoid");
+  const hasNotes = Object.hasOwn(data, "tasteNotes");
   const hasBudget = Object.hasOwn(data, "weeklyBudgetMinutes");
-  if (!hasTracks && !hasInterests && !hasBudget) throw new Error("Provide at least one learning preference to update");
+  if (!hasTracks && !hasInterests && !hasWant && !hasAvoid && !hasNotes && !hasBudget) throw new Error("Provide at least one learning preference to update");
 
   const tracks = hasTracks ? parseStringList(data.tracks, "Tracks") : safeJsonList(current.tracks_json);
   const interests = hasInterests ? parseStringList(data.interests, "Interests") : safeJsonList(current.interests_json);
+  const want = hasWant ? parseStringList(data.want, "Want more") : safeJsonList(current.want_json);
+  const avoid = hasAvoid ? parseStringList(data.avoid, "Skip") : safeJsonList(current.avoid_json);
+  const tasteNotes = hasNotes
+    ? (typeof data.tasteNotes === "string" ? data.tasteNotes.trim().slice(0, 1_500) : "")
+    : String(current.taste_notes ?? "");
   const weeklyBudgetMinutes = hasBudget
     ? parseInteger(data.weeklyBudgetMinutes, "Weekly budget", 0, maxWeeklyBudgetMinutes)
     : Number(current.weekly_budget_minutes);
 
-  await db().prepare("UPDATE learning_preferences SET tracks_json=?,interests_json=?,weekly_budget_minutes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
-    .bind(JSON.stringify(tracks), JSON.stringify(interests), weeklyBudgetMinutes, preferenceId).run();
+  await db().prepare("UPDATE learning_preferences SET tracks_json=?,interests_json=?,want_json=?,avoid_json=?,taste_notes=?,weekly_budget_minutes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+    .bind(JSON.stringify(tracks), JSON.stringify(interests), JSON.stringify(want), JSON.stringify(avoid), tasteNotes, weeklyBudgetMinutes, preferenceId).run();
   return (await getLearningConfiguration()).preferences;
 }
 

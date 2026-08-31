@@ -1,6 +1,17 @@
 import { env } from "cloudflare:workers";
 import { completeJson, liveModelsConfigured } from "@/lib/operator/llm";
-import { ensureStartupColumns } from "./startup";
+import {
+  STARTUP_IDEA_SELECT,
+  THESIS_FIELD_KEYS,
+  THESIS_FIELDS,
+  clarityAfterEdits,
+  composeStartupThesis,
+  parseThesisClarity,
+  thesisCompleteness,
+  thesisFieldsFromRow,
+  type ThesisFields,
+} from "@/lib/operator/startup-thesis";
+import { ensureStartupColumns, persistThesisFields, validateStartupThesis } from "./startup";
 
 function db() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
@@ -47,31 +58,45 @@ export async function listStartupMessages(ideaId: string) {
   return (await db().prepare("SELECT id,idea_id,role,content,created_at FROM startup_messages WHERE idea_id=? ORDER BY created_at").bind(ideaId).all<Record<string, unknown>>()).results;
 }
 
-export async function updateStartupIdea(id: string, input: Record<string, unknown>) {
+function fieldsFromInput(current: ThesisFields, input: Record<string, unknown>): ThesisFields {
+  const next = { ...current };
+  for (const key of THESIS_FIELD_KEYS) {
+    if (typeof input[key] === "string") next[key] = input[key].trim();
+  }
+  if (typeof input.nextValidation === "string" && !next.experiment) next.experiment = input.nextValidation.trim();
+  return next;
+}
+
+export async function updateStartupIdea(id: string, input: Record<string, unknown>, options: { validate?: boolean } = {}) {
   await ensureStartupColumns();
-  const current = await db().prepare("SELECT id,title,problem,target_user,state,next_validation,confidence,review_date,evidence_json,experiment,citations_json,thesis FROM startup_ideas WHERE id=?").bind(id).first<Record<string, unknown>>();
+  const current = await db().prepare(`SELECT ${STARTUP_IDEA_SELECT} FROM startup_ideas WHERE id=?`).bind(id).first<Record<string, unknown>>();
   if (!current) throw new Error("Idea was not found");
-  const problem = typeof input.problem === "string" ? input.problem.trim() : String(current.problem);
-  const targetUser = typeof input.targetUser === "string" ? input.targetUser.trim() : String(current.target_user);
-  const nextValidation = typeof input.nextValidation === "string" ? input.nextValidation.trim() : String(current.next_validation);
-  const experiment = typeof input.experiment === "string" ? input.experiment.trim() : String(current.experiment ?? "");
-  const thesis = typeof input.thesis === "string" ? input.thesis.trim() : String(current.thesis ?? "");
+  const previousFields = thesisFieldsFromRow(current);
+  const fields = fieldsFromInput(previousFields, input);
+  const nextValidation = typeof input.nextValidation === "string" ? input.nextValidation.trim() : (fields.experiment || String(current.next_validation ?? ""));
   const state = typeof input.state === "string" ? input.state : String(current.state);
   const confidence = typeof input.confidence === "number" ? Math.max(0, Math.min(100, Math.round(input.confidence))) : Number(current.confidence);
   const evidence = Array.isArray(input.evidence) ? input.evidence.map(String) : null;
-  await db().prepare("UPDATE startup_ideas SET problem=?,target_user=?,next_validation=?,experiment=?,thesis=?,state=?,confidence=?,evidence_json=COALESCE(?,evidence_json) WHERE id=?")
-    .bind(problem, targetUser, nextValidation, experiment, thesis, state, confidence, evidence ? JSON.stringify(evidence) : null, id)
+  const clarity = clarityAfterEdits(previousFields, fields, parseThesisClarity(current.field_clarity_json));
+  const thesis = composeStartupThesis(fields);
+  await persistThesisFields(id, fields, clarity, thesis, nextValidation || fields.experiment);
+  await db().prepare("UPDATE startup_ideas SET state=?,confidence=?,evidence_json=COALESCE(?,evidence_json) WHERE id=?")
+    .bind(state, confidence, evidence ? JSON.stringify(evidence) : null, id)
     .run();
-  return { message: "Thesis updated" };
+  const validation = options.validate === false ? { fields, clarity } : await validateStartupThesis(id);
+  return {
+    message: "Thesis updated",
+    fields: validation.fields,
+    clarity: validation.clarity,
+    complete: thesisCompleteness(validation.fields, validation.clarity).complete,
+  };
 }
 
-function fallbackReply(idea: Record<string, unknown>, message: string) {
-  const missing = [
-    !String(idea.problem ?? "").trim() || String(idea.problem).includes("needs framing") ? "Who hurts, and what exactly breaks for them today?" : "",
-    !String(idea.target_user ?? "").trim() || String(idea.target_user).includes("needs framing") ? "Name one specific person who would use this next week." : "",
-    !String(idea.experiment ?? "").trim() ? "What is the smallest test you could run in 14 days?" : "",
-  ].filter(Boolean);
-  const question = missing[0] || "What would make you park this idea versus committing a week to it?";
+function fallbackReply(fields: ThesisFields, message: string) {
+  const missing = THESIS_FIELDS.filter(field => !fields[field.key].trim());
+  const question = missing[0]
+    ? `${missing[0].helper} (${missing[0].label} is empty.)`
+    : "What would make you park this idea versus committing a week to it?";
   return {
     reply: `Understood: “${message.slice(0, 140)}”. ${question}`,
     updates: {} as Record<string, unknown>,
@@ -82,18 +107,19 @@ export async function chatStartupIdea(ideaId: string, message: string) {
   const text = message.trim();
   if (!text) throw new Error("Say something about the idea first");
   await ensureStartupChat();
-  const idea = await db().prepare("SELECT id,title,problem,target_user,state,next_validation,confidence,experiment,evidence_json,thesis FROM startup_ideas WHERE id=?").bind(ideaId).first<Record<string, unknown>>();
+  const idea = await db().prepare(`SELECT ${STARTUP_IDEA_SELECT} FROM startup_ideas WHERE id=?`).bind(ideaId).first<Record<string, unknown>>();
   if (!idea) throw new Error("Idea was not found");
+  const fields = thesisFieldsFromRow(idea);
   const history = await listStartupMessages(ideaId);
   const notes = await listStartupNotes(ideaId);
-  let reply = fallbackReply(idea, text);
+  let reply = fallbackReply(fields, text);
   let model = "deterministic";
   if (liveModelsConfigured()) {
     try {
       const payload = await completeJson(
         "startup_chat",
-        "Help develop a startup thesis. Ask one question if a field is empty. When you learn something, update structured fields. Return JSON {reply:string, updates?:{thesis?:string, problem?:string, targetUser?:string, nextValidation?:string, experiment?:string, evidence?:string[], confidence?:number}}. Never invent customers, revenue, or traction.",
-        JSON.stringify({ idea, notes: notes.slice(0, 8), history: history.slice(-8), message: text }),
+        "Help develop the structured thesis canvas. Ask one question if a field is empty or unclear. When you learn something, update structured fields. Return JSON {reply:string, updates?:{idea?:string, problem?:string, targetUser?:string, scale?:string, market?:string, competition?:string, whyNow?:string, unfairAdvantage?:string, riskiestAssumption?:string, experiment?:string, nextValidation?:string, evidence?:string[], confidence?:number}}. Never invent customers, revenue, or traction.",
+        JSON.stringify({ idea: { id: idea.id, title: idea.title, state: idea.state, confidence: idea.confidence, fields, clarity: parseThesisClarity(idea.field_clarity_json) }, notes: notes.slice(0, 8), history: history.slice(-8), message: text }),
       ) as { reply?: string; updates?: Record<string, unknown> };
       reply = {
         reply: String(payload.reply ?? reply.reply),

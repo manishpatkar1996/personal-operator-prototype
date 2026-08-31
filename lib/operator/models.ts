@@ -10,10 +10,14 @@ export type OperatorTask =
   | "resume_extract"
   | "voice_parse"
   | "learning_summarize"
+  | "learning_select"
+  | "content_notes"
   | "content_outline"
   | "content_draft"
+  | "content_chat"
   | "startup_research"
   | "startup_chat"
+  | "startup_validate"
   | "council";
 
 export type ModelRoute = {
@@ -42,7 +46,7 @@ export const MODEL_ROUTES: Record<OperatorTask, ModelRoute> = {
   resume_extract: {
     task: "resume_extract",
     model: MODEL_TIERS.mini,
-    useWhen: "Pull target-role keywords, strengths, and skills out of pasted résumé text once on upload.",
+    useWhen: "Write a complete job-specific LaTeX résumé from the stored résumé. User-triggered.",
     skipLlmWhen: "The user typed preferences by hand.",
     estimatedUsdPerRun: "~$0.01",
   },
@@ -60,19 +64,40 @@ export const MODEL_ROUTES: Record<OperatorTask, ModelRoute> = {
     skipLlmWhen: "Item is already short, or the user only needs the title and URL.",
     estimatedUsdPerRun: "~$0.002",
   },
+  learning_select: {
+    task: "learning_select",
+    model: MODEL_TIERS.nano,
+    useWhen: "Pick the week's articles from fetched feeds against Aemon's taste. One call per collect.",
+    skipLlmWhen: "No live model, or fewer than three candidates survived the deterministic filter.",
+    estimatedUsdPerRun: "~$0.003",
+  },
+  content_notes: {
+    task: "content_notes",
+    model: MODEL_TIERS.mini,
+    useWhen: "Turn a captured idea into working notes (angle, proof, claims to avoid).",
+    skipLlmWhen: "The idea title and strategy already make a usable note.",
+    estimatedUsdPerRun: "~$0.008",
+  },
   content_outline: {
     task: "content_outline",
     model: MODEL_TIERS.mini,
-    useWhen: "Produce a structured outline from a selected idea.",
+    useWhen: "Produce a structured outline for LinkedIn posting or a Medium article.",
     skipLlmWhen: "The backlog only needs ranking, not a draft.",
     estimatedUsdPerRun: "~$0.01",
   },
   content_draft: {
     task: "content_draft",
     model: MODEL_TIERS.standard,
-    useWhen: "Write a LinkedIn post or longer piece in the user's voice. Rare, user-triggered.",
+    useWhen: "Write a LinkedIn post or Medium article in the user's voice. Rare, user-triggered.",
     skipLlmWhen: "Handoff to an external editor is enough.",
     estimatedUsdPerRun: "~$0.04",
+  },
+  content_chat: {
+    task: "content_chat",
+    model: MODEL_TIERS.mini,
+    useWhen: "User asks Samwell how to change the current draft.",
+    skipLlmWhen: "Craft checks on hook, length, and bait are enough.",
+    estimatedUsdPerRun: "~$0.01",
   },
   startup_research: {
     task: "startup_research",
@@ -86,6 +111,13 @@ export const MODEL_ROUTES: Record<OperatorTask, ModelRoute> = {
     model: MODEL_TIERS.mini,
     useWhen: "User opens an idea and talks it into a concrete problem, user, and experiment.",
     skipLlmWhen: "The idea is only being captured as a title.",
+    estimatedUsdPerRun: "~$0.01",
+  },
+  startup_validate: {
+    task: "startup_validate",
+    model: MODEL_TIERS.mini,
+    useWhen: "Judge each thesis field clear vs unclear after a save, chat update, or research rebuild.",
+    skipLlmWhen: "No live model. Fields stay unclear until Davos can judge them.",
     estimatedUsdPerRun: "~$0.01",
   },
   council: {
@@ -102,6 +134,9 @@ export const DEEPSEEK_MODEL = "deepseek-chat";
 /** Flip to true to restore OpenAI as primary. Paused while that account has no credits. */
 export const OPENAI_LIVE = false;
 
+/** Flip to false to pause DeepSeek and use seeded/deterministic fallbacks. */
+export const DEEPSEEK_LIVE = true;
+
 export function deepseekModelFor(envVars: Record<string, string | undefined> = {}) {
   const override = envVars.OPERATOR_MODEL_DEEPSEEK;
   if (typeof override === "string" && override.trim()) return override.trim();
@@ -111,7 +146,7 @@ export function deepseekModelFor(envVars: Record<string, string | undefined> = {
 export function liveProviderOrder(openai: boolean, deepseek: boolean) {
   const order: Array<"openai" | "deepseek"> = [];
   if (OPENAI_LIVE && openai) order.push("openai");
-  if (deepseek) order.push("deepseek");
+  if (DEEPSEEK_LIVE && deepseek) order.push("deepseek");
   return order;
 }
 
