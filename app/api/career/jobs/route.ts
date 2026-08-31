@@ -1,4 +1,5 @@
 import { createJob, importJobs, listJobs, rescoreJobs, scheduleTopJob } from "@/db/jobs";
+import { generateResumeVariant, setJobFollowUp } from "@/db/career-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +23,13 @@ export async function POST(request: Request) {
     }
     if (body.scheduleTop === true) {
       return Response.json(await scheduleTopJob());
+    }
+    if (body.resumeVariant && typeof body.resumeVariant === "string") {
+      return Response.json(await generateResumeVariant(body.resumeVariant));
+    }
+    const followUp = body.followUp && typeof body.followUp === "object" ? body.followUp as Record<string, unknown> : null;
+    if (followUp) {
+      return Response.json(await setJobFollowUp(String(followUp.id ?? ""), String(followUp.date ?? ""), typeof followUp.note === "string" ? followUp.note : undefined));
     }
     const importFrom = body.importFrom && typeof body.importFrom === "object" ? body.importFrom as Record<string, unknown> : null;
     if (importFrom) {

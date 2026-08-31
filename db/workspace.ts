@@ -1,5 +1,11 @@
 import { env } from "cloudflare:workers";
+import { applyPlanningNote, retryCalendarWrite, slotForDuration } from "./calendar-slots";
+import { ensureCareerExtraColumns } from "./career-actions";
+import { ensureContentColumns, getContentStrategy } from "./content";
 import { ensureJobColumns } from "./jobs";
+import { ensureLearningItemColumns } from "./learning-collect";
+import { ensureStartupColumns } from "./startup";
+import { syncLlmConnector } from "@/lib/operator/llm";
 
 function db() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
@@ -37,6 +43,11 @@ export async function ensureWorkspaceSchema() {
   if (!calendarColumns.has("event_url")) await database.prepare("ALTER TABLE calendar_blocks ADD COLUMN event_url TEXT").run();
   if (!calendarColumns.has("last_synced_at")) await database.prepare("ALTER TABLE calendar_blocks ADD COLUMN last_synced_at TEXT").run();
   await ensureJobColumns();
+  await ensureCareerExtraColumns();
+  await ensureLearningItemColumns();
+  await ensureStartupColumns();
+  await ensureContentColumns();
+  await syncLlmConnector();
 }
 
 async function empty(table: string) {
@@ -60,9 +71,9 @@ export async function seedWorkspace() {
     database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind("cal-learning", "Agentic AI deep work", "goal-expertise", "ms-foundations", "2026-08-31T16:00:00+05:30", "2026-08-31T17:00:00+05:30", "scheduled", "operator_created", "sample"),
   ]);
   if (await empty("jobs")) await database.batch([
-    database.prepare("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?)").bind("job-zamp", "Senior Product Manager, AI", "Zamp", "Bengaluru", 92, "recommended", "Manually added", "Review role and tailor resume"),
-    database.prepare("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?)").bind("job-agents", "Product Lead, Agents", "AI Infrastructure Co.", "Remote India", 87, "saved", "Job alert email", "Research team and product surface"),
-    database.prepare("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?)").bind("job-platform", "Principal PM, AI Platform", "HealthTech", "Chennai / Hybrid", 79, "applied", "Company careers", "Follow up on 4 September"),
+    database.prepare("INSERT INTO jobs (id,title,company,location,fit_score,status,source,next_action) VALUES (?,?,?,?,?,?,?,?)").bind("job-zamp", "Senior Product Manager, AI", "Zamp", "Bengaluru", 92, "recommended", "Manually added", "Review role and tailor resume"),
+    database.prepare("INSERT INTO jobs (id,title,company,location,fit_score,status,source,next_action) VALUES (?,?,?,?,?,?,?,?)").bind("job-agents", "Product Lead, Agents", "AI Infrastructure Co.", "Remote India", 87, "saved", "Job alert email", "Research team and product surface"),
+    database.prepare("INSERT INTO jobs (id,title,company,location,fit_score,status,source,next_action) VALUES (?,?,?,?,?,?,?,?)").bind("job-platform", "Principal PM, AI Platform", "HealthTech", "Chennai / Hybrid", 79, "applied", "Company careers", "Follow up on 4 September"),
   ]);
   if (await empty("learning_tracks")) await database.batch([
     database.prepare("INSERT INTO learning_tracks VALUES (?,?,?,?,?,?)").bind("track-agentic", "Agentic AI", "Build practical depth in memory, planning, tools, and evaluation.", 180, "active", 0),
@@ -71,20 +82,20 @@ export async function seedWorkspace() {
     database.prepare("INSERT INTO learning_tracks VALUES (?,?,?,?,?,?)").bind("track-interview", "Interview preparation", "Practice role-specific product, behavioural, and AI fluency.", 120, "active", 3),
   ]);
   if (await empty("learning_items")) await database.batch([
-    database.prepare("INSERT INTO learning_items VALUES (?,?,?,?,?,?,?,?)").bind("learn-memory", "track-agentic", "Memory architectures for long-running agents", "Research paper", "Paper", 28, "recommended", "Directly supports the working Operator milestone."),
-    database.prepare("INSERT INTO learning_items VALUES (?,?,?,?,?,?,?,?)").bind("learn-evals", "track-agentic", "Evaluating tool-using agents in production", "Engineering blog", "Article", 16, "saved", "Addresses a recurring capability gap in target roles."),
-    database.prepare("INSERT INTO learning_items VALUES (?,?,?,?,?,?,?,?)").bind("learn-model", "track-news", "This week in frontier model tooling", "Curated briefing", "Brief", 12, "recommended", "Material changes only; generic announcements removed."),
-    database.prepare("INSERT INTO learning_items VALUES (?,?,?,?,?,?,?,?)").bind("learn-story", "track-interview", "Tell the AI Product Operator story", "Operator exercise", "Exercise", 35, "recommended", "Turns the strongest proof point into a concise interview narrative."),
+    database.prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance) VALUES (?,?,?,?,?,?,?,?)").bind("learn-memory", "track-agentic", "Memory architectures for long-running agents", "Research paper", "Paper", 28, "recommended", "Directly supports the working Operator milestone."),
+    database.prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance) VALUES (?,?,?,?,?,?,?,?)").bind("learn-evals", "track-agentic", "Evaluating tool-using agents in production", "Engineering blog", "Article", 16, "saved", "Addresses a recurring capability gap in target roles."),
+    database.prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance) VALUES (?,?,?,?,?,?,?,?)").bind("learn-model", "track-news", "This week in frontier model tooling", "Curated briefing", "Brief", 12, "recommended", "Material changes only; generic announcements removed."),
+    database.prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance) VALUES (?,?,?,?,?,?,?,?)").bind("learn-story", "track-interview", "Tell the AI Product Operator story", "Operator exercise", "Exercise", 35, "recommended", "Turns the strongest proof point into a concise interview narrative."),
   ]);
   if (await empty("startup_ideas")) await database.batch([
-    database.prepare("INSERT INTO startup_ideas VALUES (?,?,?,?,?,?,?,?)").bind("idea-operator", "Personal AI Operator", "Goals, plans, information, and execution are fragmented across tools.", "Ambitious knowledge workers using multiple AI tools", "researching", "Interview five people about trust and calendar autonomy.", 36, "2026-09-07"),
-    database.prepare("INSERT INTO startup_ideas VALUES (?,?,?,?,?,?,?,?)").bind("idea-career", "Career signal engine", "Job seekers cannot reliably distinguish high-fit roles from high-volume listings.", "Experienced product and AI candidates", "framing", "Test whether evidence-based fit explanations change application choices.", 20, "2026-09-10"),
+    database.prepare("INSERT INTO startup_ideas (id,title,problem,target_user,state,next_validation,confidence,review_date) VALUES (?,?,?,?,?,?,?,?)").bind("idea-operator", "Personal AI Operator", "Goals, plans, information, and execution are fragmented across tools.", "Ambitious knowledge workers using multiple AI tools", "researching", "Interview five people about trust and calendar autonomy.", 36, "2026-09-07"),
+    database.prepare("INSERT INTO startup_ideas (id,title,problem,target_user,state,next_validation,confidence,review_date) VALUES (?,?,?,?,?,?,?,?)").bind("idea-career", "Career signal engine", "Job seekers cannot reliably distinguish high-fit roles from high-volume listings.", "Experienced product and AI candidates", "framing", "Test whether evidence-based fit explanations change application choices.", 20, "2026-09-10"),
   ]);
   if (await empty("content_ideas")) await database.batch([
-    database.prepare("INSERT INTO content_ideas VALUES (?,?,?,?,?,?,?)").bind("content-goals", "Why personal AI agents need goals, not task lists", "Agentic products", "recommended", 94, "Operator build notes", "Review the prepared outline"),
-    database.prepare("INSERT INTO content_ideas VALUES (?,?,?,?,?,?,?)").bind("content-operator", "The difference between an assistant and an operator", "AI product thinking", "recommended", 89, "Product thesis", "Add one concrete before/after example"),
-    database.prepare("INSERT INTO content_ideas VALUES (?,?,?,?,?,?,?)").bind("content-approval", "Approval boundaries are a product decision", "Agent trust", "recommended", 84, "Learning stream", "Choose the strongest framework"),
-    database.prepare("INSERT INTO content_ideas VALUES (?,?,?,?,?,?,?)").bind("content-rebuild", "What I learned rebuilding my work AI system for myself", "Building in public", "idea", 78, "Current project", "Capture three lessons after Story 2"),
+    database.prepare("INSERT INTO content_ideas (id,title,pillar,status,score,source,next_action) VALUES (?,?,?,?,?,?,?)").bind("content-goals", "Why personal AI agents need goals, not task lists", "Agentic products", "recommended", 94, "Operator build notes", "Review the prepared outline"),
+    database.prepare("INSERT INTO content_ideas (id,title,pillar,status,score,source,next_action) VALUES (?,?,?,?,?,?,?)").bind("content-operator", "The difference between an assistant and an operator", "AI product thinking", "recommended", 89, "Product thesis", "Add one concrete before/after example"),
+    database.prepare("INSERT INTO content_ideas (id,title,pillar,status,score,source,next_action) VALUES (?,?,?,?,?,?,?)").bind("content-approval", "Approval boundaries are a product decision", "Agent trust", "recommended", 84, "Learning stream", "Choose the strongest framework"),
+    database.prepare("INSERT INTO content_ideas (id,title,pillar,status,score,source,next_action) VALUES (?,?,?,?,?,?,?)").bind("content-rebuild", "What I learned rebuilding my work AI system for myself", "Building in public", "idea", 78, "Current project", "Capture three lessons after Story 2"),
   ]);
   if (await empty("council_roles")) await database.batch([
     database.prepare("INSERT INTO council_roles VALUES (?,?,?,?,?,?)").bind("tyrion", "Tyrion", "Chief of Staff", "Reconcile goals, milestones, capacity, new signals, and trade-offs into a feasible plan.", "active", null),
@@ -102,33 +113,26 @@ async function rows(query: string) {
   return (await db().prepare(query).all<Record<string, unknown>>()).results;
 }
 
-function tomorrowPlanningWindow() {
-  const tomorrow = new Date(Date.now() + 86_400_000);
-  const parts = new Intl.DateTimeFormat("en", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(tomorrow);
-  const part = (type: string) => parts.find(item => item.type === type)?.value ?? "01";
-  const date = `${part("year")}-${part("month")}-${part("day")}`;
-  return { startAt: `${date}T10:00:00+05:30`, endAt: `${date}T10:45:00+05:30` };
-}
-
 export async function getWorkspace() {
   await seedWorkspace();
-  const [decisions, calendar, calendarPreferences, calendarWriteRequests, emailSignals, jobs, tracks, learningItems, startupIdeas, contentIdeas, councilRoles, councilProposals, planningNotes, connectors] = await Promise.all([
+  const [decisions, calendar, calendarPreferences, calendarWriteRequests, emailSignals, jobs, tracks, learningItems, startupIdeas, contentIdeas, councilRoles, councilProposals, planningNotes, connectors, contentStrategy] = await Promise.all([
     rows("SELECT id,decision,rationale,affected,decided_at FROM decisions ORDER BY decided_at DESC"),
     rows("SELECT id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source,external_event_id,event_url,last_synced_at FROM calendar_blocks ORDER BY start_at"),
     rows("SELECT id,policy,timezone,sync_window_days,updated_at FROM calendar_preferences WHERE id='primary'"),
     rows("SELECT id,block_id,action,status,payload_json,external_event_id,error,created_at,updated_at FROM calendar_write_requests ORDER BY created_at DESC LIMIT 50"),
     rows("SELECT id,thread_id,category,subject,sender,received_at,summary,next_action,due_at,status,message_url,last_synced_at FROM email_signals ORDER BY received_at DESC LIMIT 100"),
-    rows("SELECT id,title,company,location,fit_score,status,source,next_action,url,fit_reason,evidence_json FROM jobs ORDER BY fit_score DESC"),
+    rows("SELECT id,title,company,location,fit_score,status,source,next_action,url,fit_reason,evidence_json,follow_up_at,resume_variant FROM jobs ORDER BY fit_score DESC"),
     rows("SELECT id,name,purpose,weekly_budget_minutes,state,position FROM learning_tracks ORDER BY position"),
-    rows("SELECT id,track_id,title,source,item_type,duration_minutes,status,relevance FROM learning_items ORDER BY track_id,title"),
-    rows("SELECT id,title,problem,target_user,state,next_validation,confidence,review_date FROM startup_ideas ORDER BY review_date"),
-    rows("SELECT id,title,pillar,status,score,source,next_action FROM content_ideas ORDER BY score DESC"),
+    rows("SELECT id,track_id,title,source,item_type,duration_minutes,status,relevance,url,summary FROM learning_items ORDER BY track_id,title"),
+    rows("SELECT id,title,problem,target_user,state,next_validation,confidence,review_date,evidence_json,experiment,citations_json FROM startup_ideas ORDER BY review_date"),
+    rows("SELECT id,title,pillar,status,score,source,next_action,outline_json,draft_text FROM content_ideas ORDER BY score DESC"),
     rows("SELECT id,label,role_name,mission,status,last_run_at FROM council_roles ORDER BY id DESC"),
     rows("SELECT id,role_id,title,rationale,status,created_at FROM council_proposals ORDER BY created_at DESC"),
     rows("SELECT id,note,result,created_at FROM planning_notes ORDER BY created_at DESC LIMIT 10"),
     rows("SELECT id,name,status,detail,updated_at FROM connectors ORDER BY name"),
+    getContentStrategy(),
   ]);
-  return { decisions, calendar, calendarPreferences, calendarWriteRequests, emailSignals, jobs, tracks, learningItems, startupIdeas, contentIdeas, councilRoles, councilProposals, planningNotes, connectors };
+  return { decisions, calendar, calendarPreferences, calendarWriteRequests, emailSignals, jobs, tracks, learningItems, startupIdeas, contentIdeas, councilRoles, councilProposals, planningNotes, connectors, contentStrategy: contentStrategy ? [contentStrategy] : [] };
 }
 
 export async function mutateWorkspace(action: string, data: Record<string, unknown>) {
@@ -137,12 +141,13 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
   if (action === "planning_note") {
     const note = String(data.note ?? "").trim();
     if (!note) throw new Error("Planning note cannot be empty");
-    const { startAt, endAt } = tomorrowPlanningWindow();
+    const { parsed, slot } = await applyPlanningNote(note);
     const blockId = crypto.randomUUID();
-    const result = "Captured the note and proposed a 45-minute focus block for tomorrow at 10:00.";
+    const when = new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).format(new Date(slot.startAt));
+    const result = `Captured the note and proposed a ${parsed.durationMinutes}-minute focus block for ${when}, using the next free gap.`;
     await database.batch([
       database.prepare("INSERT INTO planning_notes (id,note,result) VALUES (?,?,?)").bind(crypto.randomUUID(), note, result),
-      database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind(blockId, note.slice(0, 72), null, null, startAt, endAt, "proposed", "operator_created", "local"),
+      database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind(blockId, parsed.title, null, null, slot.startAt, slot.endAt, "proposed", "operator_created", "local"),
     ]);
     return { message: result };
   }
@@ -159,15 +164,18 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
     const endAt = String(data.endAt ?? "");
     if (!title || !startAt || !endAt || new Date(endAt) <= new Date(startAt)) throw new Error("A title and valid start/end time are required");
     const preference = await database.prepare("SELECT policy FROM calendar_preferences WHERE id='primary'").first<{ policy: string }>();
+    const duration = Math.max(15, Math.round((Date.parse(endAt) - Date.parse(startAt)) / 60_000) || 45);
+    const slot = await slotForDuration(duration, startAt, endAt);
     const blockId = crypto.randomUUID();
     const automatic = preference?.policy !== "propose_only";
     const state = automatic ? "approved_pending" : "proposed";
     const statements = [database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)")
-      .bind(blockId, title, String(data.goalId ?? "") || null, String(data.milestoneId ?? "") || null, startAt, endAt, state, "operator_created", "local")];
+      .bind(blockId, title, String(data.goalId ?? "") || null, String(data.milestoneId ?? "") || null, slot.startAt, slot.endAt, state, "operator_created", "local")];
     if (automatic) statements.push(database.prepare("INSERT INTO calendar_write_requests (id,block_id,action,status,payload_json) VALUES (?,?,?,?,?)")
-      .bind(crypto.randomUUID(), blockId, "create", "approved_pending", JSON.stringify({ title, startAt, endAt, timezone: "Asia/Kolkata", description: `[AI Operator] Goal focus block · ${blockId}` })));
+      .bind(crypto.randomUUID(), blockId, "create", "approved_pending", JSON.stringify({ title, startAt: slot.startAt, endAt: slot.endAt, timezone: "Asia/Kolkata", description: `[AI Operator] Goal focus block · ${blockId}` })));
     await database.batch(statements);
-    return { message: automatic ? "Goal block approved automatically and queued for Google Calendar" : "Goal block proposed for your approval" };
+    const conflictNote = slot.snapped ? " The requested time overlapped an existing block, so the next free gap was used." : "";
+    return { message: (automatic ? "Goal block approved automatically and queued for Google Calendar" : "Goal block proposed for your approval") + conflictNote };
   }
   if (action === "review_calendar_block") {
     const id = String(data.id ?? "");
@@ -282,9 +290,15 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
     await database.prepare("UPDATE connectors SET status='sync_requested',detail='A read-only Gmail refresh has been requested.',updated_at=CURRENT_TIMESTAMP WHERE id='gmail'").run();
     return { message: "Gmail refresh requested" };
   }
+  if (action === "retry_calendar_write") {
+    return retryCalendarWrite(typeof data.requestId === "string" ? data.requestId : undefined, String(data.id ?? data.blockId ?? ""));
+  }
   if (action === "update_job") {
-    await database.prepare("UPDATE jobs SET status=?,next_action=? WHERE id=?").bind(String(data.status), String(data.nextAction ?? "Review next action"), String(data.id)).run();
-    return { message: "Job board updated" };
+    const status = String(data.status);
+    const followUp = status === "applied" ? new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10) : null;
+    if (followUp) await database.prepare("UPDATE jobs SET status=?,next_action=?,follow_up_at=? WHERE id=?").bind(status, String(data.nextAction ?? "Follow up in one week"), followUp, String(data.id)).run();
+    else await database.prepare("UPDATE jobs SET status=?,next_action=? WHERE id=?").bind(status, String(data.nextAction ?? "Review next action"), String(data.id)).run();
+    return { message: followUp ? `Job board updated. Follow-up set for ${followUp}.` : "Job board updated" };
   }
   if (action === "request_linkedin") {
     await database.prepare("UPDATE connectors SET status='handoff_requested',detail='Waiting for a visible user-approved Chrome collection session.',updated_at=CURRENT_TIMESTAMP WHERE id='linkedin'").run();
@@ -297,7 +311,7 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
   if (action === "add_startup") {
     const title = String(data.title ?? "").trim();
     if (!title) throw new Error("Idea title is required");
-    await database.prepare("INSERT INTO startup_ideas VALUES (?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(), title, String(data.problem ?? "Problem statement needs framing."), String(data.targetUser ?? "Target user needs framing."), "captured", "Confirm the problem, target user, and riskiest assumption.", 10, String(data.reviewDate ?? "2026-09-14")).run();
+    await database.prepare("INSERT INTO startup_ideas (id,title,problem,target_user,state,next_validation,confidence,review_date) VALUES (?,?,?,?,?,?,?,?)").bind(crypto.randomUUID(), title, String(data.problem ?? "Problem statement needs framing."), String(data.targetUser ?? "Target user needs framing."), "captured", "Confirm the problem, target user, and riskiest assumption.", 10, String(data.reviewDate ?? "2026-09-14")).run();
     return { message: "Idea added" };
   }
   if (action === "update_startup") {
@@ -316,18 +330,8 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
     return { message: "Decision recorded" };
   }
   if (action === "run_council") {
-    const createdAt = new Date().toISOString();
-    const existing = await database.prepare("SELECT COUNT(*) AS count FROM council_proposals WHERE status='proposed'").first<{ count: number }>();
-    if ((existing?.count ?? 0) > 0) {
-      await database.prepare("UPDATE council_roles SET last_run_at=? WHERE id IN ('tyrion','samwell')").bind(createdAt).run();
-      return { message: "The current council proposals still need review" };
-    }
-    await database.batch([
-      database.prepare("UPDATE council_roles SET last_run_at=? WHERE id IN ('tyrion','samwell')").bind(createdAt),
-      database.prepare("INSERT INTO council_proposals (id,role_id,title,rationale,status,created_at) VALUES (?,?,?,?,?,?)").bind(crypto.randomUUID(), "tyrion", "Protect one interview-preparation block this week", "The career milestone is nearer than the content milestone and the calendar has no protected interview block.", "proposed", createdAt),
-      database.prepare("INSERT INTO council_proposals (id,role_id,title,rationale,status,created_at) VALUES (?,?,?,?,?,?)").bind(crypto.randomUUID(), "samwell", "Use the Operator build as this week's primary content thread", "It advances career positioning and the agentic AI expertise goal with one shared artifact.", "proposed", createdAt),
-    ]);
-    return { message: "Retrospective complete — two proposals need review" };
+    const { runCouncil } = await import("./council");
+    return runCouncil();
   }
   if (action === "update_proposal") {
     const status = String(data.status);

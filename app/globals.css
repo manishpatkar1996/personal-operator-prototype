@@ -105,4 +105,6 @@ nav { display:grid; gap:18px; } nav section { display:grid; gap:3px; }.nav-label
 .evidence { margin:8px 0 0; padding-left:18px; color:var(--muted); font-size:12px; }
 .job-card .button-link { margin-top:10px; justify-self:start; width:max-content; }
 @media(max-width:980px){.job-add,.job-import{grid-template-columns:1fr 1fr}}
-@media(max-width:620px){.job-add,.job-import{grid-template-columns:1fr}}
+.variant-preview { margin:10px 0 0; max-height:160px; overflow:auto; padding:10px; border-radius:6px; background:#f4f6f3; color:#3d4641; white-space:pre-wrap; font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; }
+.idea-foot .actions, .job-card .actions { margin-top:10px; }
+.idea-foot select { width:auto; }

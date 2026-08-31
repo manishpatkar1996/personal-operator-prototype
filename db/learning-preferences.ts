@@ -82,6 +82,11 @@ export async function ensureLearningPreferencesSchema() {
     database.prepare("CREATE INDEX IF NOT EXISTS idx_learning_sources_enabled_priority ON learning_sources(enabled, priority)"),
   ]);
   await database.prepare("INSERT OR IGNORE INTO learning_preferences (id) VALUES (?)").bind(preferenceId).run();
+  const sourceCount = await database.prepare("SELECT COUNT(*) AS count FROM learning_sources").first<{ count: number }>();
+  if ((sourceCount?.count ?? 0) === 0) {
+    await database.prepare("INSERT INTO learning_sources (id,name,source_type,url,enabled,priority) VALUES (?,?,?,?,?,?)")
+      .bind("source-simon", "Simon Willison", "website", "https://simonwillison.net/", 1, 4).run();
+  }
   await database.prepare("PRAGMA optimize").run();
 }
 

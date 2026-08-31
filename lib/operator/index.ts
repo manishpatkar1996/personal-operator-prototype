@@ -1,4 +1,6 @@
 export { assembleOperatorContext } from "./context.ts";
+export { remainingCapacityMinutes, nextFreeSlot, parsePlanningNote, conflictsWith } from "./calendar.ts";
+export { buildCouncilProposals } from "./council.ts";
 export { runOperatorEvals } from "./evals.ts";
 export { generateOperatorPlan, type OperatorModelAdapter, type OperatorModelRequest, type OperatorPlanResult } from "./model-adapter.ts";
 export { createOpenAIAdapter } from "./openai-adapter.ts";

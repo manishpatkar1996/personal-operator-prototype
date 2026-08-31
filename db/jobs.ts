@@ -1,6 +1,8 @@
 import { env } from "cloudflare:workers";
 import { getCareerProfile, type CareerProfile } from "./career";
 import { scoreJob, type ScoreableProfile } from "@/lib/operator/scoring";
+import { ensureCareerExtraColumns } from "./career-actions";
+import { slotForDuration } from "./calendar-slots";
 
 export type JobRecord = {
   id: string;
@@ -14,6 +16,8 @@ export type JobRecord = {
   url: string;
   fitReason: string;
   evidence: string[];
+  followUpAt?: string;
+  resumeVariant?: string;
 };
 
 type JobRow = {
@@ -28,6 +32,8 @@ type JobRow = {
   url?: string | null;
   fit_reason?: string | null;
   evidence_json?: string | null;
+  follow_up_at?: string | null;
+  resume_variant?: string | null;
 };
 
 function db() {
@@ -58,6 +64,8 @@ function mapJob(row: JobRow): JobRecord {
     url: row.url ?? "",
     fitReason: row.fit_reason ?? "",
     evidence: parseEvidence(row.evidence_json),
+    followUpAt: row.follow_up_at ?? undefined,
+    resumeVariant: row.resume_variant ?? "",
   };
 }
 
@@ -66,6 +74,7 @@ export async function ensureJobColumns() {
   if (!columns.has("url")) await db().prepare("ALTER TABLE jobs ADD COLUMN url TEXT NOT NULL DEFAULT ''").run();
   if (!columns.has("fit_reason")) await db().prepare("ALTER TABLE jobs ADD COLUMN fit_reason TEXT NOT NULL DEFAULT ''").run();
   if (!columns.has("evidence_json")) await db().prepare("ALTER TABLE jobs ADD COLUMN evidence_json TEXT NOT NULL DEFAULT '[]'").run();
+  await ensureCareerExtraColumns();
 }
 
 function asProfile(profile: CareerProfile): ScoreableProfile {
@@ -86,7 +95,7 @@ function fingerprint(title: string, company: string, url: string) {
 
 export async function listJobs(): Promise<JobRecord[]> {
   await ensureJobColumns();
-  const rows = await db().prepare("SELECT id,title,company,location,fit_score,status,source,next_action,url,fit_reason,evidence_json FROM jobs ORDER BY fit_score DESC, title").all<JobRow>();
+  const rows = await db().prepare("SELECT id,title,company,location,fit_score,status,source,next_action,url,fit_reason,evidence_json,follow_up_at,resume_variant FROM jobs ORDER BY fit_score DESC, title").all<JobRow>();
   return rows.results.map(mapJob);
 }
 
@@ -194,19 +203,11 @@ export async function importJobs(provider: string, board: string) {
   return { imported, skipped, total: listings.length, provider };
 }
 
-function tomorrowWindow() {
-  const tomorrow = new Date(Date.now() + 86_400_000);
-  const parts = new Intl.DateTimeFormat("en", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(tomorrow);
-  const part = (type: string) => parts.find(item => item.type === type)?.value ?? "01";
-  const date = `${part("year")}-${part("month")}-${part("day")}`;
-  return { startAt: `${date}T10:00:00+05:30`, endAt: `${date}T10:45:00+05:30` };
-}
-
 export async function scheduleTopJob() {
   const jobs = (await listJobs()).filter(job => !new Set(["applied", "rejected", "archived"]).has(job.status));
   const top = jobs.sort((a, b) => b.fitScore - a.fitScore)[0];
   if (!top) throw new Error("Add or import a role first");
-  const { startAt, endAt } = tomorrowWindow();
+  const slot = await slotForDuration(45);
   const preference = await db().prepare("SELECT policy FROM calendar_preferences WHERE id='primary'").first<{ policy: string }>();
   const automatic = preference?.policy !== "propose_only";
   const blockId = crypto.randomUUID();
@@ -214,21 +215,22 @@ export async function scheduleTopJob() {
   const state = automatic ? "approved_pending" : "proposed";
   const statements = [
     db().prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)")
-      .bind(blockId, title, "goal-career", "ms-pipeline", startAt, endAt, state, "operator_created", "local"),
+      .bind(blockId, title, "goal-career", "ms-pipeline", slot.startAt, slot.endAt, state, "operator_created", "local"),
     db().prepare("UPDATE jobs SET next_action=? WHERE id=?").bind("Review during the proposed calendar block", top.id),
   ];
   if (automatic) {
     statements.push(db().prepare("INSERT INTO calendar_write_requests (id,block_id,action,status,payload_json) VALUES (?,?,?,?,?)")
-      .bind(crypto.randomUUID(), blockId, "create", "approved_pending", JSON.stringify({ title, startAt, endAt, timezone: "Asia/Kolkata", description: `[AI Operator] Application review · ${top.id}` })));
+      .bind(crypto.randomUUID(), blockId, "create", "approved_pending", JSON.stringify({ title, startAt: slot.startAt, endAt: slot.endAt, timezone: "Asia/Kolkata", description: `[AI Operator] Application review · ${top.id}` })));
   }
   await db().batch(statements);
+  const when = new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).format(new Date(slot.startAt));
   return {
     jobId: top.id,
     blockId,
     title,
-    startAt,
+    startAt: slot.startAt,
     message: automatic
-      ? `Queued a calendar block to review ${top.title} at ${top.company}`
-      : `Proposed a 45-minute block tomorrow at 10:00 to review ${top.title} at ${top.company}`,
+      ? `Queued a calendar block at ${when} to review ${top.title} at ${top.company}`
+      : `Proposed a 45-minute block at ${when} to review ${top.title} at ${top.company}`,
   };
 }

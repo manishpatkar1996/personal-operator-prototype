@@ -1,3 +1,4 @@
+import { remainingCapacityMinutes } from "./calendar.ts";
 import { validateOperatorPlan } from "./schema.ts";
 import type { OperatorActionKind, OperatorContext, OperatorDomain, OperatorPlan, OperatorPlanAction, OperatorPlanPriority, OperatorPlanSignal } from "./types.ts";
 
@@ -108,10 +109,10 @@ function signals(context: OperatorContext): OperatorPlanSignal[] {
     id: "signal-resume", category: "info", domain: "career", title: "Career scoring is running without a résumé",
     detail: "Upload or paste a résumé so role rankings can cite evidence instead of seed scores.", sourceIds: ["career-profile"],
   });
-  const externalMeetings = context.calendar.filter(item => item.startAt.slice(0, 10) === context.today && item.ownership === "external_fixed");
-  if (externalMeetings.length) result.push({
-    id: "signal-today-capacity", category: "info", domain: "calendar", title: `${externalMeetings.length} fixed calendar commitment${externalMeetings.length === 1 ? "" : "s"} today`,
-    detail: "Focus recommendations should be scheduled around these immovable events.", sourceIds: externalMeetings.map(item => item.id),
+  const remaining = remainingCapacityMinutes(context.calendar, context.today);
+  if (remaining < 90) result.push({
+    id: "signal-capacity", category: "risk", domain: "calendar", title: `Only ${remaining} minutes of focus capacity remain today`,
+    detail: "New Operator blocks will snap to the next free weekday gap instead of overlapping existing events.", sourceIds: context.calendar.map(item => item.id).slice(0, 6),
   });
   return result.slice(0, 12);
 }

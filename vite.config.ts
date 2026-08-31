@@ -15,7 +15,7 @@ const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
   vars: {
-    OPENAI_API_KEY: process.env.OPENAI_API_KEY ?? "",
+    ...(process.env.OPENAI_API_KEY ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY } : {}),
   },
   d1_databases: d1
     ? [

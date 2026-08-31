@@ -97,6 +97,8 @@ export const jobs = sqliteTable("jobs", {
   url: text("url").notNull().default(""),
   fitReason: text("fit_reason").notNull().default(""),
   evidenceJson: text("evidence_json").notNull().default("[]"),
+  followUpAt: text("follow_up_at"),
+  resumeVariant: text("resume_variant").notNull().default(""),
 }, table => [index("idx_jobs_status_fit").on(table.status, table.fitScore)]);
 
 export const learningTracks = sqliteTable("learning_tracks", {
@@ -117,6 +119,8 @@ export const learningItems = sqliteTable("learning_items", {
   durationMinutes: integer("duration_minutes").notNull(),
   status: text("status").notNull().default("recommended"),
   relevance: text("relevance").notNull(),
+  url: text("url").notNull().default(""),
+  summary: text("summary").notNull().default(""),
 }, table => [index("idx_learning_track_status").on(table.trackId, table.status)]);
 
 export const startupIdeas = sqliteTable("startup_ideas", {
@@ -128,6 +132,9 @@ export const startupIdeas = sqliteTable("startup_ideas", {
   nextValidation: text("next_validation").notNull(),
   confidence: integer("confidence").notNull().default(20),
   reviewDate: text("review_date").notNull(),
+  evidenceJson: text("evidence_json").notNull().default("[]"),
+  experiment: text("experiment").notNull().default(""),
+  citationsJson: text("citations_json").notNull().default("[]"),
 });
 
 export const contentIdeas = sqliteTable("content_ideas", {
@@ -138,7 +145,16 @@ export const contentIdeas = sqliteTable("content_ideas", {
   score: integer("score").notNull(),
   source: text("source").notNull(),
   nextAction: text("next_action").notNull(),
+  outlineJson: text("outline_json").notNull().default("[]"),
+  draftText: text("draft_text").notNull().default(""),
 }, table => [index("idx_content_status_score").on(table.status, table.score)]);
+
+export const contentStrategy = sqliteTable("content_strategy", {
+  id: text("id").primaryKey(),
+  thesis: text("thesis").notNull(),
+  sourceName: text("source_name").notNull().default(""),
+  updatedAt: text("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+});
 
 export const councilRoles = sqliteTable("council_roles", {
   id: text("id").primaryKey(),
