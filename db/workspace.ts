@@ -130,8 +130,8 @@ export async function getWorkspace() {
     rows("SELECT id,title,company,location,fit_score,status,source,next_action,url,fit_reason,evidence_json,follow_up_at,resume_variant FROM jobs ORDER BY fit_score DESC"),
     rows("SELECT id,name,purpose,weekly_budget_minutes,state,position FROM learning_tracks ORDER BY position"),
     rows("SELECT id,track_id,title,source,item_type,duration_minutes,status,relevance,url,summary FROM learning_items ORDER BY track_id,title"),
-    rows("SELECT id,title,problem,target_user,state,next_validation,confidence,review_date,evidence_json,experiment,citations_json FROM startup_ideas ORDER BY review_date"),
-    rows("SELECT id,title,pillar,status,score,source,next_action,outline_json,draft_text FROM content_ideas ORDER BY score DESC"),
+    rows("SELECT id,title,problem,target_user,state,next_validation,confidence,review_date,evidence_json,experiment,citations_json,thesis FROM startup_ideas ORDER BY review_date"),
+    rows("SELECT id,title,pillar,status,score,source,next_action,outline_json,draft_text,notes_text FROM content_ideas ORDER BY score DESC"),
     rows("SELECT id,label,role_name,mission,status,last_run_at,program,never_text,prompt_id FROM council_roles ORDER BY label"),
     rows("SELECT id,role_id,title,rationale,status,created_at FROM council_proposals ORDER BY created_at DESC"),
     rows("SELECT id,note,result,created_at FROM planning_notes ORDER BY created_at DESC LIMIT 10"),
@@ -150,11 +150,21 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
     const { parsed, slot } = await applyPlanningNote(note);
     const blockId = crypto.randomUUID();
     const when = new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).format(new Date(slot.startAt));
-    const result = `Captured the note and proposed a ${parsed.durationMinutes}-minute focus block for ${when}, using the next free gap.`;
-    await database.batch([
+    const preference = await database.prepare("SELECT policy FROM calendar_preferences WHERE id='primary'").first<{ policy: string }>();
+    const automatic = preference?.policy !== "propose_only";
+    const state = "scheduled";
+    const result = automatic
+      ? `Captured the note and added a ${parsed.durationMinutes}-minute block for ${when} on the Operator calendar.`
+      : `Captured the note and placed a ${parsed.durationMinutes}-minute block for ${when} on the Operator calendar. Google Calendar writes stay queued until that connector is connected.`;
+    const statements = [
       database.prepare("INSERT INTO planning_notes (id,note,result) VALUES (?,?,?)").bind(crypto.randomUUID(), note, result),
-      database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind(blockId, parsed.title, null, null, slot.startAt, slot.endAt, "proposed", "operator_created", "local"),
-    ]);
+      database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind(blockId, parsed.title, null, null, slot.startAt, slot.endAt, state, "operator_created", "local"),
+    ];
+    if (automatic) {
+      statements.push(database.prepare("INSERT INTO calendar_write_requests (id,block_id,action,status,payload_json) VALUES (?,?,?,?,?)")
+        .bind(crypto.randomUUID(), blockId, "create", "approved_pending", JSON.stringify({ title: parsed.title, startAt: slot.startAt, endAt: slot.endAt, timezone: "Asia/Kolkata", description: "[AI Operator] Planning note" })));
+    }
+    await database.batch(statements);
     return { message: result };
   }
   if (action === "update_calendar_policy") {
@@ -169,6 +179,8 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
     const startAt = String(data.startAt ?? "");
     const endAt = String(data.endAt ?? "");
     if (!title || !startAt || !endAt || new Date(endAt) <= new Date(startAt)) throw new Error("A title and valid start/end time are required");
+    const conflict = await database.prepare("SELECT title,start_at,end_at FROM calendar_blocks WHERE state NOT IN ('dismissed','write_failed') AND datetime(start_at)<datetime(?) AND datetime(end_at)>datetime(?) ORDER BY start_at LIMIT 1").bind(endAt, startAt).first<{ title: string; start_at: string; end_at: string }>();
+    if (conflict) throw new Error(`That time overlaps with “${conflict.title}”. Choose another slot.`);
     const preference = await database.prepare("SELECT policy FROM calendar_preferences WHERE id='primary'").first<{ policy: string }>();
     const duration = Math.max(15, Math.round((Date.parse(endAt) - Date.parse(startAt)) / 60_000) || 45);
     const slot = await slotForDuration(duration, startAt, endAt);

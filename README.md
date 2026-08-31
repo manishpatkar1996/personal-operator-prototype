@@ -16,7 +16,7 @@ A local-first working prototype that turns goals and dated milestones into a dai
 - Cloudflare D1-compatible schema and checked-in migrations.
 - Multiple learning tracks and persistent learning queues.
 
-Put `OPENAI_API_KEY` in gitignored `.dev.vars`. Per-task model routing lives in `lib/operator/models.ts`.
+Put `OPENAI_API_KEY` in gitignored `.dev.vars`. Add `DEEPSEEK_API_KEY` there too if you want DeepSeek as the live fallback when OpenAI is down or rate-limited. Per-task OpenAI routing lives in `lib/operator/models.ts`; fallback uses `deepseek-chat`.
 
 External services are not simulated. Google Calendar, Gmail, LinkedIn/Chrome collection, and live model research remain visibly unconnected until their credentials or user-approved handoffs are configured.
 

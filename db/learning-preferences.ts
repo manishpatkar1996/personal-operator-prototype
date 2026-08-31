@@ -82,6 +82,19 @@ export async function ensureLearningPreferencesSchema() {
     database.prepare("CREATE INDEX IF NOT EXISTS idx_learning_sources_enabled_priority ON learning_sources(enabled, priority)"),
   ]);
   await database.prepare("INSERT OR IGNORE INTO learning_preferences (id) VALUES (?)").bind(preferenceId).run();
+  const current = await database.prepare("SELECT tracks_json,interests_json,weekly_budget_minutes FROM learning_preferences WHERE id=?")
+    .bind(preferenceId).first<Record<string, unknown>>();
+  if (current) {
+    const tracks = safeJsonList(current.tracks_json);
+    const interests = safeJsonList(current.interests_json);
+    const nextTracks = tracks.length ? tracks : ["Agentic AI", "AI news & research", "Product management"];
+    const nextInterests = interests.length ? interests : ["Memory", "tool use", "evaluations", "enterprise AI platforms"];
+    if (!tracks.length || !interests.length) {
+      await database.prepare("UPDATE learning_preferences SET tracks_json=?,interests_json=?,weekly_budget_minutes=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(JSON.stringify(nextTracks), JSON.stringify(nextInterests), Number(current.weekly_budget_minutes) || 300, preferenceId)
+        .run();
+    }
+  }
   const sourceCount = await database.prepare("SELECT COUNT(*) AS count FROM learning_sources").first<{ count: number }>();
   if ((sourceCount?.count ?? 0) === 0) {
     await database.prepare("INSERT INTO learning_sources (id,name,source_type,url,enabled,priority) VALUES (?,?,?,?,?,?)")

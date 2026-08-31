@@ -1,16 +1,45 @@
 import { env } from "cloudflare:workers";
 import { DEFAULT_PROMPTS } from "./agents.ts";
-import { modelFor, type OperatorTask } from "./models.ts";
+import { deepseekModelFor, liveProviderOrder, modelFor, type OperatorTask } from "./models.ts";
+import { composeLiveSystemPrompt } from "./system-prompt.ts";
 
 const MAX_CHARS = 24_000;
 
-function apiKey() {
-  const value = (env as { OPENAI_API_KEY?: string }).OPENAI_API_KEY;
+type ModelProvider = "openai" | "deepseek";
+
+let lastProvider: ModelProvider | "" = "";
+
+export function lastModelProvider() {
+  return lastProvider;
+}
+
+function envRecord() {
+  return env as Record<string, string | undefined>;
+}
+
+function readKey(name: "OPENAI_API_KEY" | "DEEPSEEK_API_KEY") {
+  const value = envRecord()[name];
   return typeof value === "string" && value.trim().length > 8 ? value.trim() : "";
 }
 
+function openaiKey() {
+  return readKey("OPENAI_API_KEY");
+}
+
+function deepseekKey() {
+  return readKey("DEEPSEEK_API_KEY");
+}
+
 export function openaiConfigured() {
-  return Boolean(apiKey());
+  return Boolean(openaiKey());
+}
+
+export function deepseekConfigured() {
+  return Boolean(deepseekKey());
+}
+
+export function liveModelsConfigured() {
+  return openaiConfigured() || deepseekConfigured();
 }
 
 async function storedPrompt(task: string) {
@@ -56,40 +85,82 @@ async function preferenceContext(task: OperatorTask) {
   return "";
 }
 
-export async function completeJson(task: OperatorTask, system: string, user: string) {
-  const key = apiKey();
-  if (!key) throw new Error("OPENAI_API_KEY is not configured");
-  const systemPrompt = (await storedPrompt(task)) || system || DEFAULT_PROMPTS.find(item => item.id === task)?.systemPrompt || "";
-  if (!systemPrompt.trim()) throw new Error("No system prompt is configured for this task");
-  const extra = await preferenceContext(task);
-  const response = await fetch("https://api.openai.com/v1/chat/completions", {
+async function chatJson(options: {
+  provider: ModelProvider;
+  url: string;
+  key: string;
+  model: string;
+  temperature: number;
+  messages: { role: "system" | "user"; content: string }[];
+}) {
+  const response = await fetch(options.url, {
     method: "POST",
     headers: {
-      authorization: `Bearer ${key}`,
+      authorization: `Bearer ${options.key}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
-      model: modelFor(task, env as Record<string, string | undefined>),
-      temperature: task === "council" || task === "content_draft" ? 0.4 : 0.2,
+      model: options.model,
+      temperature: options.temperature,
       response_format: { type: "json_object" },
-      messages: [
-        { role: "system", content: `${systemPrompt}${extra}\nReturn JSON only.` },
-        { role: "user", content: user.slice(0, MAX_CHARS) },
-      ],
+      messages: options.messages,
     }),
   });
-  if (!response.ok) throw new Error(`OpenAI request failed (${response.status})`);
+  if (!response.ok) throw new Error(`${options.provider === "openai" ? "OpenAI" : "DeepSeek"} request failed (${response.status})`);
   const payload = await response.json() as { choices?: { message?: { content?: string } }[] };
   const content = payload.choices?.[0]?.message?.content;
-  if (!content) throw new Error("OpenAI returned an empty response");
+  if (!content) throw new Error(`${options.provider === "openai" ? "OpenAI" : "DeepSeek"} returned an empty response`);
   return JSON.parse(content) as unknown;
+}
+
+export async function completeJson(task: OperatorTask, system: string, user: string) {
+  lastProvider = "";
+  const stored = await storedPrompt(task);
+  const catalog = DEFAULT_PROMPTS.find(item => item.id === task)?.systemPrompt || "";
+  const systemPrompt = composeLiveSystemPrompt(stored || catalog, system);
+  if (!systemPrompt.trim()) throw new Error("No system prompt is configured for this task");
+  const extra = await preferenceContext(task);
+  const temperature = task === "council" || task === "content_draft" ? 0.4 : 0.2;
+  const messages = [
+    { role: "system" as const, content: `${systemPrompt}${extra}\nReturn JSON only.` },
+    { role: "user" as const, content: user.slice(0, MAX_CHARS) },
+  ];
+  const vars = envRecord();
+  const errors: string[] = [];
+
+  for (const provider of liveProviderOrder(openaiConfigured(), deepseekConfigured())) {
+    try {
+      const value = await chatJson({
+        provider,
+        url: provider === "openai" ? "https://api.openai.com/v1/chat/completions" : "https://api.deepseek.com/v1/chat/completions",
+        key: provider === "openai" ? openaiKey() : deepseekKey(),
+        model: provider === "openai" ? modelFor(task, vars) : deepseekModelFor(vars),
+        temperature,
+        messages,
+      });
+      lastProvider = provider;
+      return value;
+    } catch (caught) {
+      errors.push(caught instanceof Error ? caught.message : String(caught));
+    }
+  }
+
+  if (!errors.length) throw new Error("No model key is configured. Add OPENAI_API_KEY or DEEPSEEK_API_KEY to .dev.vars.");
+  throw new Error(errors.join(" Then "));
 }
 
 export async function syncLlmConnector() {
   if (!env.DB) return;
-  const status = openaiConfigured() ? "connected" : "not_connected";
-  const detail = openaiConfigured()
-    ? "OpenAI is configured. Models follow the per-task nano/mini/standard table."
-    : "Local rules and seeded results are active; live research requires a model key.";
+  const order = liveProviderOrder(openaiConfigured(), deepseekConfigured());
+  const openai = order.includes("openai");
+  const deepseek = order.includes("deepseek");
+  const status = openai || deepseek ? "connected" : "not_connected";
+  const detail = openai && deepseek
+    ? "OpenAI is primary. DeepSeek covers 429s and other live-model failures."
+    : openai
+      ? "OpenAI is configured. Add DEEPSEEK_API_KEY to .dev.vars for a live fallback."
+      : deepseek
+        ? "DeepSeek is the live model. OpenAI is paused."
+        : "Local rules and seeded results are active; live research requires a model key.";
   await env.DB.prepare("UPDATE connectors SET status=?,detail=?,updated_at=CURRENT_TIMESTAMP WHERE id='llm'").bind(status, detail).run();
 }

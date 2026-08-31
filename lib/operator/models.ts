@@ -97,6 +97,24 @@ export const MODEL_ROUTES: Record<OperatorTask, ModelRoute> = {
   },
 };
 
+export const DEEPSEEK_MODEL = "deepseek-chat";
+
+/** Flip to true to restore OpenAI as primary. Paused while that account has no credits. */
+export const OPENAI_LIVE = false;
+
+export function deepseekModelFor(envVars: Record<string, string | undefined> = {}) {
+  const override = envVars.OPERATOR_MODEL_DEEPSEEK;
+  if (typeof override === "string" && override.trim()) return override.trim();
+  return DEEPSEEK_MODEL;
+}
+
+export function liveProviderOrder(openai: boolean, deepseek: boolean) {
+  const order: Array<"openai" | "deepseek"> = [];
+  if (OPENAI_LIVE && openai) order.push("openai");
+  if (deepseek) order.push("deepseek");
+  return order;
+}
+
 export function modelFor(task: OperatorTask, envVars: Record<string, string | undefined> = {}) {
   const override = envVars[`OPERATOR_MODEL_${task.toUpperCase()}`];
   if (typeof override === "string" && override.trim()) return override.trim();

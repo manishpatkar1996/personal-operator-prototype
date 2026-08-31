@@ -1,5 +1,6 @@
 import { env } from "cloudflare:workers";
 import { getCareerProfile, type CareerProfile } from "./career";
+import { isRelevantTrackedJob } from "@/lib/operator/job-relevance.ts";
 import { scoreJob, type ScoreableProfile } from "@/lib/operator/scoring";
 import { ensureCareerExtraColumns } from "./career-actions";
 import { slotForDuration } from "./calendar-slots";
@@ -104,13 +105,14 @@ export async function rescoreJobs(profile?: CareerProfile) {
   const current = profile ?? await getCareerProfile();
   const jobs = await listJobs();
   if (!jobs.length) return { updated: 0 };
-  const statements = jobs.map(job => {
-    const scored = scoreJob(asProfile(current), job);
-    return db().prepare("UPDATE jobs SET fit_score=?,fit_reason=?,evidence_json=? WHERE id=?")
-      .bind(scored.fitScore, scored.fitReason, JSON.stringify(scored.evidence), job.id);
-  });
-  await db().batch(statements);
-  return { updated: jobs.length };
+  const scoredJobs = jobs.map(job => ({ job, scored: scoreJob(asProfile(current), job) }));
+  const statements = scoredJobs.map(({ job, scored }) => db().prepare("UPDATE jobs SET fit_score=?,fit_reason=?,evidence_json=? WHERE id=?")
+    .bind(scored.fitScore, scored.fitReason, JSON.stringify(scored.evidence), job.id));
+  const hide = scoredJobs
+    .filter(({ job, scored }) => !isRelevantTrackedJob({ title: job.title, fitScore: scored.fitScore, status: job.status, source: job.source }, asProfile(current)) && job.status === "recommended")
+    .map(({ job }) => db().prepare("UPDATE jobs SET status=?,next_action=? WHERE id=?").bind("archived", "Hidden: off-profile or below the fit bar", job.id));
+  await db().batch([...statements, ...hide]);
+  return { updated: jobs.length, hidden: hide.length };
 }
 
 export async function createJob(input: {
@@ -197,6 +199,12 @@ export async function importJobs(provider: string, board: string) {
       continue;
     }
     seen.add(key);
+    const profile = await getCareerProfile();
+    const scored = scoreJob(asProfile(profile), listing);
+    if (!isRelevantTrackedJob({ title: listing.title, fitScore: scored.fitScore, status: "recommended", source: listing.source }, asProfile(profile))) {
+      skipped += 1;
+      continue;
+    }
     await createJob(listing);
     imported += 1;
   }
@@ -204,7 +212,8 @@ export async function importJobs(provider: string, board: string) {
 }
 
 export async function scheduleTopJob() {
-  const jobs = (await listJobs()).filter(job => !new Set(["applied", "rejected", "archived"]).has(job.status));
+  const profile = await getCareerProfile();
+  const jobs = (await listJobs()).filter(job => isRelevantTrackedJob(job, asProfile(profile)) && !new Set(["applied", "rejected", "archived"]).has(job.status));
   const top = jobs.sort((a, b) => b.fitScore - a.fitScore)[0];
   if (!top) throw new Error("Add or import a role first");
   const slot = await slotForDuration(45);

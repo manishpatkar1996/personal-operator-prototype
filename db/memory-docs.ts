@@ -56,7 +56,7 @@ Exclude: ${(career.exclusions ?? []).join(", ") || "Not set"}
 
 ## Active roles
 
-${jobs.results.length ? jobs.results.map(job => `- ${String(job.title)} at ${String(job.company)} — ${String(job.fit_score)}% — ${String(job.status)}`).join("\n") : "No roles on the board yet."}`,
+${jobs.results.filter(job => !/account executive|account exec|\bsdr\b|\bbdr\b/i.test(String(job.title)) && String(job.status) !== "archived").map(job => `- ${String(job.title)} at ${String(job.company)} — ${String(job.fit_score)}% — ${String(job.status)}`).join("\n") || "No relevant roles on the board yet."}`,
     "content-strategy": `# Content strategy
 
 Source: ${strategy?.source_name ?? "Working thesis"}

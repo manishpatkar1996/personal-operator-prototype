@@ -1,6 +1,6 @@
 import { env } from "cloudflare:workers";
 import { getLearningConfiguration } from "./learning-preferences";
-import { completeJson, openaiConfigured } from "@/lib/operator/llm";
+import { completeJson, liveModelsConfigured } from "@/lib/operator/llm";
 
 function db() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
@@ -11,6 +11,14 @@ export async function ensureLearningItemColumns() {
   const columns = new Set((await db().prepare("PRAGMA table_info(learning_items)").all<{ name: string }>()).results.map(column => column.name));
   if (!columns.has("url")) await db().prepare("ALTER TABLE learning_items ADD COLUMN url TEXT NOT NULL DEFAULT ''").run();
   if (!columns.has("summary")) await db().prepare("ALTER TABLE learning_items ADD COLUMN summary TEXT NOT NULL DEFAULT ''").run();
+  await db().batch([
+    db().prepare("UPDATE learning_items SET url=?,summary=? WHERE id=? AND (url IS NULL OR url='')")
+      .bind("https://arxiv.org/search/?query=memory+architecture+agents&searchtype=all", "Long-running agents fail when they cannot retrieve the right context. Read the research, then come back to the Operator with what you would actually ship.", "learn-memory"),
+    db().prepare("UPDATE learning_items SET url=?,summary=? WHERE id=? AND (url IS NULL OR url='')")
+      .bind("https://simonwillison.net/", "Production evals are how tool-using agents earn trust. Skim for one eval you could copy into this Operator.", "learn-evals"),
+    db().prepare("UPDATE learning_items SET url=? WHERE id=? AND (url IS NULL OR url='')")
+      .bind("https://simonwillison.net/", "learn-model"),
+  ]);
 }
 
 function extractText(html: string) {
@@ -38,16 +46,19 @@ function pickTrack(tracks: { id: string; name: string }[], text: string) {
 }
 
 async function summarize(title: string, text: string, interests: string[]) {
-  if (!openaiConfigured() || text.length < 80) return firstSentences(text);
+  const fallbackInsight = firstSentences(text);
+  if (!liveModelsConfigured() || text.length < 80) return { insight: fallbackInsight, summary: fallbackInsight };
   try {
     const payload = await completeJson(
       "learning_summarize",
-      "Summarise this source for a personal AI operator. Return JSON {summary, relevance}. Never recommend applying, messaging, or publishing.",
+      "Return JSON {insight:string, summary:string}. insight is one sentence on why this matters for the user's tracks. summary is two sentences max. Do not paste the article. Never recommend applying, messaging, or publishing.",
       JSON.stringify({ title, interests, excerpt: text.slice(0, 4_000) }),
-    ) as { summary?: string; relevance?: string };
-    return String(payload.summary ?? payload.relevance ?? firstSentences(text)).slice(0, 420);
+    ) as { insight?: string; summary?: string; relevance?: string };
+    const insight = String(payload.insight ?? payload.relevance ?? fallbackInsight).slice(0, 280);
+    const summary = String(payload.summary ?? fallbackInsight).slice(0, 420);
+    return { insight, summary };
   } catch {
-    return firstSentences(text);
+    return { insight: fallbackInsight, summary: fallbackInsight };
   }
 }
 
@@ -81,10 +92,10 @@ export async function collectLearning() {
         continue;
       }
       const text = extractText(html);
-      const summary = await summarize(title, text, preferences.interests);
-      const trackId = pickTrack(tracks, `${title} ${summary} ${preferences.tracks.join(" ")}`) ?? "track-news";
+      const distilled = await summarize(title, text, preferences.interests);
+      const trackId = pickTrack(tracks, `${title} ${distilled.insight} ${preferences.tracks.join(" ")}`) ?? "track-news";
       await db().prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance,url,summary) VALUES (?,?,?,?,?,?,?,?,?,?)")
-        .bind(crypto.randomUUID(), trackId, title, source.name, source.sourceType === "paper_repository" ? "Paper" : "Article", 12, "recommended", summary, source.url, summary)
+        .bind(crypto.randomUUID(), trackId, title, source.name, source.sourceType === "paper_repository" ? "Paper" : "Article", 12, "recommended", distilled.insight, source.url, distilled.summary)
         .run();
       seen.add(key);
       seen.add(title.toLowerCase());
@@ -101,5 +112,5 @@ export async function collectLearning() {
       }
     }
   }
-  return { collected, skipped, failed, sources: enabled.length, model: openaiConfigured() ? "nano" : "deterministic" };
+  return { collected, skipped, failed, sources: enabled.length, model: liveModelsConfigured() ? "live" : "deterministic" };
 }

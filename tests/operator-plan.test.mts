@@ -4,7 +4,10 @@ import { conflictsWith, nextFreeSlot, parsePlanningNote } from "../lib/operator/
 import { buildCouncilProposals } from "../lib/operator/council.ts";
 import { assembleOperatorContext } from "../lib/operator/context.ts";
 import { runOperatorEvals } from "../lib/operator/evals.ts";
+import { liveProviderOrder } from "../lib/operator/models.ts";
 import { scoreJob } from "../lib/operator/scoring.ts";
+import { composeLiveSystemPrompt } from "../lib/operator/system-prompt.ts";
+import { isQuotaSalesRole, isRelevantTrackedJob } from "../lib/operator/job-relevance.ts";
 
 test("operator eval suite passes", () => {
   const result = runOperatorEvals();
@@ -57,4 +60,29 @@ test("council proposals cite the live high-fit job", () => {
   assert.equal(proposals.length, 2);
   assert.ok(proposals[0].title.includes("Product Lead, Agents"));
   assert.ok(proposals[1].title.toLowerCase().includes("outline"));
+});
+
+test("quota sales roles stay off a product board", () => {
+  assert.equal(isQuotaSalesRole("Account Executive, Enterprise"), true);
+  assert.equal(isQuotaSalesRole("Senior Product Manager, AI"), false);
+  assert.equal(isRelevantTrackedJob({ title: "Account Executive, AI Sales", fitScore: 44, status: "recommended", source: "Greenhouse · Stripe" }, { targetRoles: ["Senior Product Manager"] }), false);
+  assert.equal(isRelevantTrackedJob({ title: "Product Lead, Agents", fitScore: 86, status: "saved", source: "Job alert email" }, { targetRoles: ["Senior Product Manager"] }), true);
+});
+
+test("live system prompt keeps the agent voice and appends the JSON contract", () => {
+  const composed = composeLiveSystemPrompt(
+    "You are Tyrion.\nReturn JSON only that matches the supplied plan schema.",
+    'Return JSON only that matches this schema:\n{"version":1}',
+  );
+  assert.match(composed, /You are Tyrion/);
+  assert.match(composed, /"version":1/);
+  assert.equal(composeLiveSystemPrompt("same", "same"), "same");
+  assert.equal(composeLiveSystemPrompt("", "contract only"), "contract only");
+});
+
+test("DeepSeek is the live model while OpenAI is paused", () => {
+  assert.deepEqual(liveProviderOrder(true, true), ["deepseek"]);
+  assert.deepEqual(liveProviderOrder(false, true), ["deepseek"]);
+  assert.deepEqual(liveProviderOrder(true, false), []);
+  assert.deepEqual(liveProviderOrder(false, false), []);
 });

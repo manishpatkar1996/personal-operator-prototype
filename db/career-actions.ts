@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { completeJson, openaiConfigured } from "@/lib/operator/llm";
+import { completeJson, liveModelsConfigured } from "@/lib/operator/llm";
 import { getCareerProfile } from "./career";
 
 function db() {
@@ -49,7 +49,7 @@ export async function generateResumeVariant(jobId: string) {
     "This is a local draft. The Operator will not submit an application.",
   ].join("\n");
   let model = "deterministic";
-  if (openaiConfigured()) {
+  if (liveModelsConfigured()) {
     try {
       const payload = await completeJson(
         "resume_extract",

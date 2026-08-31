@@ -33,6 +33,15 @@ export async function ensurePrompts() {
     await database.prepare("INSERT OR IGNORE INTO operator_prompts (id,role_id,title,use_when,system_prompt) VALUES (?,?,?,?,?)")
       .bind(prompt.id, prompt.roleId, prompt.title, prompt.useWhen, prompt.systemPrompt).run();
   }
+  await database.prepare("CREATE TABLE IF NOT EXISTS operator_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)").run();
+  const revision = await database.prepare("SELECT value FROM operator_meta WHERE key='prompt_revision'").first<{ value: string }>();
+  if (Number(revision?.value ?? 0) < 2) {
+    for (const prompt of DEFAULT_PROMPTS) {
+      await database.prepare("UPDATE operator_prompts SET role_id=?,title=?,use_when=?,system_prompt=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(prompt.roleId, prompt.title, prompt.useWhen, prompt.systemPrompt, prompt.id).run();
+    }
+    await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('prompt_revision','2')").run();
+  }
 }
 
 export async function getPrompt(id: string) {

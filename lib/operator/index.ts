@@ -4,7 +4,7 @@ export { buildCouncilProposals } from "./council.ts";
 export { runOperatorEvals } from "./evals.ts";
 export { generateOperatorPlan, type OperatorModelAdapter, type OperatorModelRequest, type OperatorPlanResult } from "./model-adapter.ts";
 export { createOpenAIAdapter } from "./openai-adapter.ts";
-export { modelFor, MODEL_ROUTES, MODEL_TIERS } from "./models.ts";
+export { modelFor, MODEL_ROUTES, MODEL_TIERS, liveProviderOrder, DEEPSEEK_MODEL } from "./models.ts";
 export { buildDeterministicPlan } from "./planner.ts";
 export { scoreJob, profileHasSignal } from "./scoring.ts";
 export { assertOperatorPlan, OPERATOR_PLAN_JSON_SCHEMA, validateOperatorPlan } from "./schema.ts";

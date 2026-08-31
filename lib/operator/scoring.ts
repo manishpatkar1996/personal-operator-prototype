@@ -125,6 +125,12 @@ export function scoreJob(profile: ScoreableProfile, job: ScoreableJob): JobScore
     }
   }
 
+  if (/\b(account executive|account exec|\bsdr\b|\bbdr\b|quota-carrying)\b/i.test(job.title)
+    && !profile.targetRoles.some(role => /account executive|sales/i.test(role))) {
+    score -= 32;
+    evidence.push("Quota-carrying sales title is off-profile for the current target roles.");
+  }
+
   const fitScore = Math.max(8, Math.min(97, Math.round(score)));
   const fitReason = evidence.length
     ? evidence.slice(0, 3).join(" ")

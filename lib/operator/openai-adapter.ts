@@ -1,5 +1,5 @@
 import type { OperatorModelAdapter, OperatorModelRequest } from "./model-adapter.ts";
-import { completeJson, openaiConfigured } from "./llm.ts";
+import { completeJson, lastModelProvider, liveModelsConfigured } from "./llm.ts";
 import { OPERATOR_PLAN_JSON_SCHEMA } from "./schema.ts";
 
 const MAX_CONTEXT_CHARS = 24_000;
@@ -35,19 +35,21 @@ function compactContext(request: OperatorModelRequest) {
 
 export function createOpenAIAdapter(): OperatorModelAdapter {
   return {
-    id: "openai",
+    get id() {
+      return lastModelProvider() || "openai";
+    },
     isConfigured() {
-      return openaiConfigured();
+      return liveModelsConfigured();
     },
     async generate(request) {
       return completeJson(
         "daily_plan",
         [
-          "You are the Personal AI Operator planner.",
           "Return JSON only that matches this schema:",
           JSON.stringify(request.responseSchema ?? OPERATOR_PLAN_JSON_SCHEMA),
+          "Required root fields: version (must be the number 1), generatedAt, horizonDate, timezone, summary, generation.mode ('model'), priorities, actions, signals.",
+          "Each priority needs integer rank 1-3, domain career|learning|startup|content|calendar|general, estimatedMinutes 5-480, confidence 0-1, and sourceIds from context.",
           "Never recommend applying, messaging, sending email, publishing, or changing permissions.",
-          "Every priority and action must include sourceIds from the provided context.",
           "Prefer the highest-fit open job when career work is due.",
           "Keep summary under 280 characters.",
         ].join("\n"),

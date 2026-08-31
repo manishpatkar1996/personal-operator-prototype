@@ -11,6 +11,7 @@ import type {
   OperatorPlanningNote,
   OperatorStartupIdea,
 } from "./types.ts";
+import { isRelevantTrackedJob } from "./job-relevance.ts";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -247,6 +248,10 @@ export function assembleOperatorContext(input: OperatorContextInput): OperatorCo
   const timezone = text(input.timezone ?? calendarPreferences.timezone, "Asia/Kolkata");
   const assembledAt = safeNow.toISOString();
 
+  const careerProfile = normalizeCareerProfile(input.careerProfile);
+  const jobs = array(workspace.jobs).map(normalizeJob).filter(item => item !== null)
+    .filter(job => isRelevantTrackedJob(job, { targetRoles: careerProfile?.targetRoles ?? [] }));
+
   return {
     version: 1,
     assembledAt,
@@ -254,13 +259,13 @@ export function assembleOperatorContext(input: OperatorContextInput): OperatorCo
     today: dateInTimezone(safeNow, timezone),
     goals: array(goalsSource).map(normalizeGoal).filter(item => item !== null),
     calendar: array(workspace.calendar).map(normalizeCalendar).filter(item => item !== null),
-    jobs: array(workspace.jobs).map(normalizeJob).filter(item => item !== null),
+    jobs,
     learningItems: array(workspace.learningItems).map(normalizeLearningItem).filter(item => item !== null),
     startupIdeas: array(workspace.startupIdeas).map(normalizeStartupIdea).filter(item => item !== null),
     contentIdeas: array(workspace.contentIdeas).map(normalizeContentIdea).filter(item => item !== null),
     connectors: array(workspace.connectors).map(normalizeConnector).filter(item => item !== null),
     planningNotes: array(workspace.planningNotes).map(normalizePlanningNote).filter(item => item !== null)
       .map(item => ({ ...item, createdAt: validDate(item.createdAt, assembledAt) })),
-    careerProfile: normalizeCareerProfile(input.careerProfile),
+    careerProfile,
   };
 }

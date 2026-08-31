@@ -16,6 +16,7 @@ const localBindingConfig = {
   compatibility_flags: ["nodejs_compat"],
   vars: {
     ...(process.env.OPENAI_API_KEY ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY } : {}),
+    ...(process.env.DEEPSEEK_API_KEY ? { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY } : {}),
   },
   d1_databases: d1
     ? [

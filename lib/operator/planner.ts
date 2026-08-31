@@ -38,7 +38,7 @@ function goalCandidates(context: OperatorContext): Candidate[] {
         score: goal.priority * 18 + urgencyScore(days) + (100 - milestone.completionPercentage) * 0.12 + (milestone.status === "blocked" ? 8 : 0),
         domain,
         title: milestone.status === "blocked" ? `Unblock ${milestone.title}` : `Advance ${milestone.title}`,
-        reason: `${goal.title} is priority ${goal.priority}/5; this milestone is ${milestone.completionPercentage}% complete and due ${milestone.targetDate}.`,
+        reason: `${goal.title} is ${goal.priority >= 5 ? "highest" : goal.priority === 4 ? "high" : goal.priority === 3 ? "medium" : goal.priority === 2 ? "low" : "lowest"} priority; this milestone is ${milestone.completionPercentage}% complete and due ${milestone.targetDate}.`,
         estimatedMinutes: domain === "career" ? 45 : 60,
         confidence: 0.92,
         sourceIds: [goal.id, milestone.id],

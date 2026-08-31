@@ -3,7 +3,7 @@ import { getCareerProfile } from "./career";
 import { getWorkspace } from "./workspace";
 import { assembleOperatorContext } from "@/lib/operator/context.ts";
 import { buildCouncilProposals } from "@/lib/operator/council.ts";
-import { completeJson, openaiConfigured } from "@/lib/operator/llm";
+import { completeJson, liveModelsConfigured } from "@/lib/operator/llm";
 import { env } from "cloudflare:workers";
 
 function db() {
@@ -22,7 +22,7 @@ export async function runCouncil() {
   const context = assembleOperatorContext({ goals, workspace, careerProfile });
   let drafts = buildCouncilProposals(context);
   let model = "deterministic";
-  if (openaiConfigured()) {
+  if (liveModelsConfigured()) {
     try {
       const payload = await completeJson(
         "council",
