@@ -1,5 +1,5 @@
-import { validateOperatorPlan } from "./schema";
-import type { OperatorActionKind, OperatorContext, OperatorDomain, OperatorPlan, OperatorPlanAction, OperatorPlanPriority, OperatorPlanSignal } from "./types";
+import { validateOperatorPlan } from "./schema.ts";
+import type { OperatorActionKind, OperatorContext, OperatorDomain, OperatorPlan, OperatorPlanAction, OperatorPlanPriority, OperatorPlanSignal } from "./types.ts";
 
 type Candidate = Omit<OperatorPlanPriority, "id" | "rank"> & { score: number; actionKind: OperatorActionKind };
 
@@ -52,11 +52,23 @@ function goalCandidates(context: OperatorContext): Candidate[] {
 function workspaceCandidates(context: OperatorContext): Candidate[] {
   const candidates: Candidate[] = [];
   const job = context.jobs.filter(item => !new Set(["applied", "rejected", "archived"]).has(item.status)).sort((a, b) => b.fitScore - a.fitScore)[0];
-  if (job) candidates.push({
-    score: job.fitScore + 8, domain: "career", title: `${job.nextAction}: ${job.title} at ${job.company}`,
-    reason: `This is the highest uncompleted role match at ${job.fitScore}% fit.`, estimatedMinutes: 35, confidence: 0.88,
-    sourceIds: [job.id], actionKind: "review",
-  });
+  if (job) {
+    const profileReady = Boolean(context.careerProfile?.resumeExcerpt || context.careerProfile?.targetRoles.length);
+    const careerGoal = context.goals.find(goal => /career|job|role|application/i.test(`${goal.id} ${goal.title}`));
+    const careerMilestone = careerGoal?.milestones.find(item => item.completionPercentage < 100 && item.status !== "skipped");
+    candidates.push({
+      score: job.fitScore + (profileReady ? 18 : 8) + (job.fitScore >= 85 ? 20 : 0),
+      domain: "career",
+      title: `Review ${job.title} at ${job.company}`,
+      reason: job.fitReason || `This is the highest uncompleted role match at ${job.fitScore}% fit.`,
+      estimatedMinutes: 45,
+      confidence: profileReady ? 0.9 : 0.72,
+      sourceIds: [job.id, careerGoal?.id, careerMilestone?.id].filter((item): item is string => Boolean(item)),
+      goalId: careerGoal?.id,
+      milestoneId: careerMilestone?.id,
+      actionKind: "focus_block",
+    });
+  }
   const learning = context.learningItems.filter(item => item.status === "recommended").sort((a, b) => a.durationMinutes - b.durationMinutes)[0];
   if (learning) candidates.push({
     score: 64, domain: "learning", title: `Learn: ${learning.title}`, reason: learning.relevance || "This item is in the recommended learning queue.",
@@ -91,6 +103,10 @@ function signals(context: OperatorContext): OperatorPlanSignal[] {
   if (highFit.length) result.push({
     id: "signal-high-fit-jobs", category: "opportunity", domain: "career", title: `${highFit.length} high-fit role${highFit.length === 1 ? "" : "s"} need review`,
     detail: `The strongest current match is ${Math.max(...highFit.map(item => item.fitScore))}%.`, sourceIds: highFit.map(item => item.id),
+  });
+  if (!context.careerProfile?.resumeExcerpt) result.push({
+    id: "signal-resume", category: "info", domain: "career", title: "Career scoring is running without a résumé",
+    detail: "Upload or paste a résumé so role rankings can cite evidence instead of seed scores.", sourceIds: ["career-profile"],
   });
   const externalMeetings = context.calendar.filter(item => item.startAt.slice(0, 10) === context.today && item.ownership === "external_fixed");
   if (externalMeetings.length) result.push({

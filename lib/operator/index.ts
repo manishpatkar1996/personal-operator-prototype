@@ -1,5 +1,9 @@
-export { assembleOperatorContext } from "./context";
-export { generateOperatorPlan, type OperatorModelAdapter, type OperatorModelRequest, type OperatorPlanResult } from "./model-adapter";
-export { buildDeterministicPlan } from "./planner";
-export { assertOperatorPlan, OPERATOR_PLAN_JSON_SCHEMA, validateOperatorPlan } from "./schema";
-export type * from "./types";
+export { assembleOperatorContext } from "./context.ts";
+export { runOperatorEvals } from "./evals.ts";
+export { generateOperatorPlan, type OperatorModelAdapter, type OperatorModelRequest, type OperatorPlanResult } from "./model-adapter.ts";
+export { createOpenAIAdapter } from "./openai-adapter.ts";
+export { modelFor, MODEL_ROUTES, MODEL_TIERS } from "./models.ts";
+export { buildDeterministicPlan } from "./planner.ts";
+export { scoreJob, profileHasSignal } from "./scoring.ts";
+export { assertOperatorPlan, OPERATOR_PLAN_JSON_SCHEMA, validateOperatorPlan } from "./schema.ts";
+export type * from "./types.ts";

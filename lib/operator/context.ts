@@ -1,5 +1,6 @@
 import type {
   OperatorCalendarBlock,
+  OperatorCareerProfile,
   OperatorConnector,
   OperatorContentIdea,
   OperatorContext,
@@ -9,7 +10,7 @@ import type {
   OperatorLearningItem,
   OperatorPlanningNote,
   OperatorStartupIdea,
-} from "./types";
+} from "./types.ts";
 
 type UnknownRecord = Record<string, unknown>;
 
@@ -112,11 +113,28 @@ function normalizeCalendar(value: unknown): OperatorCalendarBlock | null {
   };
 }
 
+function stringList(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.map(item => text(item)).filter(Boolean);
+}
+
 function normalizeJob(value: unknown): OperatorJob | null {
   const source = record(value);
   const id = text(source.id);
   const title = text(source.title);
   if (!id || !title) return null;
+  const evidenceValue = source.evidence ?? source.evidence_json;
+  let evidence: string[] = [];
+  if (typeof evidenceValue === "string") {
+    try {
+      const parsed: unknown = JSON.parse(evidenceValue);
+      evidence = Array.isArray(parsed) ? parsed.map(item => text(item)).filter(Boolean) : [];
+    } catch {
+      evidence = [];
+    }
+  } else if (Array.isArray(evidenceValue)) {
+    evidence = evidenceValue.map(item => text(item)).filter(Boolean);
+  }
   return {
     id, title,
     company: text(source.company, "Unknown company"),
@@ -125,6 +143,27 @@ function normalizeJob(value: unknown): OperatorJob | null {
     status: text(source.status, "recommended"),
     source: text(source.source, "unknown"),
     nextAction: text(first(source, "nextAction", "next_action"), "Review role"),
+    url: optionalText(source.url),
+    fitReason: optionalText(first(source, "fitReason", "fit_reason")),
+    evidence,
+  };
+}
+
+function normalizeCareerProfile(value: unknown): OperatorCareerProfile | null {
+  const source = record(value);
+  if (!Object.keys(source).length) return null;
+  const resume = text(first(source, "resumeText", "resume_text"));
+  return {
+    targetRoles: stringList(source.targetRoles ?? source.target_roles),
+    locations: stringList(source.locations),
+    industries: stringList(source.industries),
+    workModes: stringList(source.workModes ?? source.work_modes),
+    strengths: stringList(source.strengths),
+    exclusions: stringList(source.exclusions),
+    compensationNotes: text(first(source, "compensationNotes", "compensation_notes")),
+    resumeFilename: text(first(source, "resumeFilename", "resume_filename")),
+    resumeExcerpt: resume.slice(0, 4_000),
+    onboardingStatus: text(first(source, "onboardingStatus", "onboarding_status"), "not_started"),
   };
 }
 
@@ -222,5 +261,6 @@ export function assembleOperatorContext(input: OperatorContextInput): OperatorCo
     connectors: array(workspace.connectors).map(normalizeConnector).filter(item => item !== null),
     planningNotes: array(workspace.planningNotes).map(normalizePlanningNote).filter(item => item !== null)
       .map(item => ({ ...item, createdAt: validDate(item.createdAt, assembledAt) })),
+    careerProfile: normalizeCareerProfile(input.careerProfile),
   };
 }

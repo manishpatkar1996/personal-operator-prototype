@@ -1,14 +1,15 @@
 import { listGoals } from "@/db/goals";
+import { getCareerProfile } from "@/db/career";
 import { getWorkspace } from "@/db/workspace";
-import { assembleOperatorContext, generateOperatorPlan } from "@/lib/operator";
+import { assembleOperatorContext, createOpenAIAdapter, generateOperatorPlan } from "@/lib/operator";
 
 export const dynamic = "force-dynamic";
 
 async function createPlan(now?: string) {
   if (now && Number.isNaN(Date.parse(now))) throw new Error("now must be a valid ISO date-time");
-  const [goals, workspace] = await Promise.all([listGoals(), getWorkspace()]);
-  const context = assembleOperatorContext({ goals, workspace, now });
-  const result = await generateOperatorPlan(context);
+  const [goals, workspace, careerProfile] = await Promise.all([listGoals(), getWorkspace(), getCareerProfile()]);
+  const context = assembleOperatorContext({ goals, workspace, careerProfile, now });
+  const result = await generateOperatorPlan(context, createOpenAIAdapter());
   return {
     ...result,
     context: {

@@ -1,6 +1,6 @@
-import { buildDeterministicPlan } from "./planner";
-import { OPERATOR_PLAN_JSON_SCHEMA, validateOperatorPlan } from "./schema";
-import type { OperatorContext, OperatorPlan } from "./types";
+import { buildDeterministicPlan } from "./planner.ts";
+import { OPERATOR_PLAN_JSON_SCHEMA, validateOperatorPlan } from "./schema.ts";
+import type { OperatorContext, OperatorPlan } from "./types.ts";
 
 export type OperatorModelRequest = {
   context: OperatorContext;

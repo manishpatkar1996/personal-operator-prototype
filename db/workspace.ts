@@ -1,4 +1,5 @@
 import { env } from "cloudflare:workers";
+import { ensureJobColumns } from "./jobs";
 
 function db() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
@@ -35,6 +36,7 @@ export async function ensureWorkspaceSchema() {
   if (!calendarColumns.has("external_event_id")) await database.prepare("ALTER TABLE calendar_blocks ADD COLUMN external_event_id TEXT").run();
   if (!calendarColumns.has("event_url")) await database.prepare("ALTER TABLE calendar_blocks ADD COLUMN event_url TEXT").run();
   if (!calendarColumns.has("last_synced_at")) await database.prepare("ALTER TABLE calendar_blocks ADD COLUMN last_synced_at TEXT").run();
+  await ensureJobColumns();
 }
 
 async function empty(table: string) {
@@ -116,7 +118,7 @@ export async function getWorkspace() {
     rows("SELECT id,policy,timezone,sync_window_days,updated_at FROM calendar_preferences WHERE id='primary'"),
     rows("SELECT id,block_id,action,status,payload_json,external_event_id,error,created_at,updated_at FROM calendar_write_requests ORDER BY created_at DESC LIMIT 50"),
     rows("SELECT id,thread_id,category,subject,sender,received_at,summary,next_action,due_at,status,message_url,last_synced_at FROM email_signals ORDER BY received_at DESC LIMIT 100"),
-    rows("SELECT id,title,company,location,fit_score,status,source,next_action FROM jobs ORDER BY fit_score DESC"),
+    rows("SELECT id,title,company,location,fit_score,status,source,next_action,url,fit_reason,evidence_json FROM jobs ORDER BY fit_score DESC"),
     rows("SELECT id,name,purpose,weekly_budget_minutes,state,position FROM learning_tracks ORDER BY position"),
     rows("SELECT id,track_id,title,source,item_type,duration_minutes,status,relevance FROM learning_items ORDER BY track_id,title"),
     rows("SELECT id,title,problem,target_user,state,next_validation,confidence,review_date FROM startup_ideas ORDER BY review_date"),

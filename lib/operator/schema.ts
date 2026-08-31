@@ -1,4 +1,4 @@
-import { OPERATOR_ACTION_KINDS, OPERATOR_DOMAINS, type OperatorPlan, type PlanValidationResult } from "./types";
+import { OPERATOR_ACTION_KINDS, OPERATOR_DOMAINS, type OperatorPlan, type PlanValidationResult } from "./types.ts";
 
 export const OPERATOR_PLAN_JSON_SCHEMA = {
   $schema: "https://json-schema.org/draft/2020-12/schema",

@@ -3,6 +3,7 @@ import {
   getCareerProfile,
   saveCareerProfile,
 } from "@/db/career";
+import { rescoreJobs } from "@/db/jobs";
 
 export const dynamic = "force-dynamic";
 
@@ -59,7 +60,9 @@ export async function PUT(request: Request) {
       );
     }
 
-    return Response.json({ profile: await saveCareerProfile(body) });
+    const profile = await saveCareerProfile(body);
+    await rescoreJobs(profile);
+    return Response.json({ profile });
   } catch (error) {
     return errorResponse(error);
   }

@@ -94,6 +94,9 @@ export const jobs = sqliteTable("jobs", {
   status: text("status").notNull().default("recommended"),
   source: text("source").notNull(),
   nextAction: text("next_action").notNull(),
+  url: text("url").notNull().default(""),
+  fitReason: text("fit_reason").notNull().default(""),
+  evidenceJson: text("evidence_json").notNull().default("[]"),
 }, table => [index("idx_jobs_status_fit").on(table.status, table.fitScore)]);
 
 export const learningTracks = sqliteTable("learning_tracks", {

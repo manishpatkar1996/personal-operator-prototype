@@ -46,6 +46,22 @@ export type OperatorJob = {
   status: string;
   source: string;
   nextAction: string;
+  url?: string;
+  fitReason?: string;
+  evidence?: string[];
+};
+
+export type OperatorCareerProfile = {
+  targetRoles: string[];
+  locations: string[];
+  industries: string[];
+  workModes: string[];
+  strengths: string[];
+  exclusions: string[];
+  compensationNotes: string;
+  resumeFilename: string;
+  resumeExcerpt: string;
+  onboardingStatus: string;
 };
 
 export type OperatorLearningItem = {
@@ -106,11 +122,13 @@ export type OperatorContext = {
   contentIdeas: OperatorContentIdea[];
   connectors: OperatorConnector[];
   planningNotes: OperatorPlanningNote[];
+  careerProfile: OperatorCareerProfile | null;
 };
 
 export type OperatorContextInput = {
   goals?: unknown;
   workspace?: unknown;
+  careerProfile?: unknown;
   now?: string | Date;
   timezone?: string;
 };
