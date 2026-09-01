@@ -12,6 +12,7 @@ import {
   type ThesisFields,
 } from "@/lib/operator/startup-thesis";
 import { ensureStartupColumns, persistThesisFields, validateStartupThesis } from "./startup";
+import { startupRunsValidate } from "@/lib/operator/token-policy";
 
 function db() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
@@ -83,7 +84,9 @@ export async function updateStartupIdea(id: string, input: Record<string, unknow
   await db().prepare("UPDATE startup_ideas SET state=?,confidence=?,evidence_json=COALESCE(?,evidence_json) WHERE id=?")
     .bind(state, confidence, evidence ? JSON.stringify(evidence) : null, id)
     .run();
-  const validation = options.validate === false ? { fields, clarity } : await validateStartupThesis(id);
+  const validation = options.validate === false || !startupRunsValidate("save")
+    ? { fields, clarity }
+    : await validateStartupThesis(id);
   return {
     message: "Thesis updated",
     fields: validation.fields,
@@ -130,7 +133,9 @@ export async function chatStartupIdea(ideaId: string, message: string) {
       model = "fallback";
     }
   }
-  if (Object.keys(reply.updates).length) await updateStartupIdea(ideaId, reply.updates);
+  if (Object.keys(reply.updates).length) {
+    await updateStartupIdea(ideaId, reply.updates, { validate: startupRunsValidate("chat") });
+  }
   await db().batch([
     db().prepare("INSERT INTO startup_messages (id,idea_id,role,content) VALUES (?,?,?,?)").bind(crypto.randomUUID(), ideaId, "user", text),
     db().prepare("INSERT INTO startup_messages (id,idea_id,role,content) VALUES (?,?,?,?)").bind(crypto.randomUUID(), ideaId, "agent", reply.reply.slice(0, 4_000)),

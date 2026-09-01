@@ -1,7 +1,7 @@
 import { env } from "cloudflare:workers";
 import { completeJson, deepseekConfigured, lastModelProvider, openaiConfigured } from "@/lib/operator/llm";
 import { liveProviderOrder } from "@/lib/operator/models";
-import { fallbackResumeLatex, isCompleteLatex, latexFromModelPayload, resumeTexFilename } from "@/lib/operator/resume-latex";
+import { matchResumeToJob, parseStoredMatch, RESUME_REQUIRED_MESSAGE, resumeIsUsable } from "@/lib/operator/scoring";
 import { getCareerProfile } from "./career";
 
 function db() {
@@ -30,48 +30,97 @@ export async function setJobFollowUp(id: string, date: string, note?: string) {
   return { message: `Follow-up set for ${job.title} at ${job.company}`, date };
 }
 
-export async function generateResumeVariant(jobId: string, options: { regenerate?: boolean } = {}) {
+function colourFromPayload(payload: unknown, fallback: { reason: string; gaps: string[] }) {
+  if (!payload || typeof payload !== "object") return fallback;
+  const record = payload as Record<string, unknown>;
+  const reason = typeof record.reason === "string" && record.reason.trim() ? record.reason.trim() : fallback.reason;
+  const gaps = Array.isArray(record.gaps) ? record.gaps.map(item => String(item).trim()).filter(Boolean).slice(0, 6) : [];
+  return { reason, gaps: gaps.length ? gaps : fallback.gaps };
+}
+
+export async function explainJobMatch(jobId: string, options: { regenerate?: boolean } = {}) {
   await ensureCareerExtraColumns();
   const [job, profile] = await Promise.all([
-    db().prepare("SELECT id,title,company,location,fit_reason,resume_variant FROM jobs WHERE id=?").bind(jobId).first<{
+    db().prepare("SELECT id,title,company,location,description,fit_score,fit_reason,evidence_json FROM jobs WHERE id=?").bind(jobId).first<{
       id: string;
       title: string;
       company: string;
       location: string;
+      description: string;
+      fit_score: number;
       fit_reason: string;
-      resume_variant: string;
+      evidence_json: string;
     }>(),
     getCareerProfile(),
   ]);
   if (!job) throw new Error("Role was not found");
-  if (!profile.resumeText.trim()) throw new Error("Paste a résumé first so a job-specific variant can be generated");
-  const filename = resumeTexFilename(job.company, job.title);
-  if (!options.regenerate && isCompleteLatex(job.resume_variant)) {
-    return { jobId, variant: job.resume_variant, latex: job.resume_variant, filename, model: "stored", reused: true };
+  if (!resumeIsUsable(profile.resumeText)) throw new Error(RESUME_REQUIRED_MESSAGE);
+
+  const stored = parseStoredMatch(job.evidence_json);
+  if (!options.regenerate && stored.matches.length && stored.gaps.length && job.fit_reason.trim()) {
+    return {
+      jobId,
+      fitScore: Number(job.fit_score),
+      reason: job.fit_reason,
+      evidence: stored.matches,
+      matches: stored.matches,
+      gaps: stored.gaps,
+      model: "stored",
+      reused: true,
+    };
   }
 
-  const posting = { title: job.title, company: job.company, location: job.location, fitReason: job.fit_reason };
-  let latex = fallbackResumeLatex(posting, profile);
-  let model = "fallback";
+  const scored = matchResumeToJob({
+    targetRoles: profile.targetRoles,
+    industries: profile.industries,
+    locations: profile.locations,
+    workModes: profile.workModes,
+    strengths: profile.strengths,
+    exclusions: profile.exclusions,
+    resumeText: profile.resumeText,
+  }, { title: job.title, company: job.company, location: job.location, description: job.description ?? "" });
+
+  let reason = scored.fitReason;
+  let gaps = scored.gaps;
+  let model = "deterministic";
   const live = liveProviderOrder(openaiConfigured(), deepseekConfigured());
   if (live.length) {
     try {
-      const resume = profile.resumeText.slice(0, 18_000);
       const payload = await completeJson(
-        "resume_extract",
-        "Emit a complete compilable LaTeX résumé for this one posting. Return JSON {latex:string}. latex must include \\documentclass (article or resume is fine), \\begin{document}, and \\end{document}. If the stored résumé is already LaTeX, keep its packages and structure and retarget section order and bullets for this role. Use only employers, titles, dates, tools, and metrics written in the stored résumé or this job. Do not invent facts. Drop quota-carrying sales language. Never apply, message, or send.",
-        JSON.stringify({ job: posting, resume, strengths: profile.strengths, targetRoles: profile.targetRoles }),
+        "job_explain",
+        "Colour the deterministic résumé overlap for this posting. Return JSON {reason:string, gaps:string[]}. reason is 2–4 sentences citing only résumé evidence. gaps are 2–5 concrete résumé or story fixes, not a rewritten résumé. Do not change the numeric fit score. Never recommend auto-applying.",
+        JSON.stringify({
+          job: { title: job.title, company: job.company, location: job.location, description: (job.description ?? "").slice(0, 8_000) },
+          resume: profile.resumeText.slice(0, 18_000),
+          fitScore: scored.fitScore,
+          evidence: scored.evidence,
+          gaps: scored.gaps,
+          strengths: profile.strengths,
+          targetRoles: profile.targetRoles,
+          exclusions: profile.exclusions,
+        }),
       );
-      const generated = latexFromModelPayload(payload);
-      if (isCompleteLatex(generated)) {
-        latex = generated;
-        model = lastModelProvider() || live[0];
-      }
+      const coloured = colourFromPayload(payload, { reason, gaps });
+      reason = coloured.reason;
+      gaps = coloured.gaps;
+      model = lastModelProvider() || live[0];
     } catch {
-      model = "fallback";
+      model = "deterministic";
     }
   }
 
-  await db().prepare("UPDATE jobs SET resume_variant=?,next_action=? WHERE id=?").bind(latex, "Review the job-specific résumé variant before any application", jobId).run();
-  return { jobId, variant: latex, latex, filename, model, reused: false };
+  await db().prepare("UPDATE jobs SET fit_score=?,fit_reason=?,evidence_json=?,next_action=? WHERE id=?")
+    .bind(scored.fitScore, reason, JSON.stringify({ matches: scored.evidence, gaps }), "Review résumé overlap before any application", jobId)
+    .run();
+
+  return {
+    jobId,
+    fitScore: scored.fitScore,
+    reason,
+    evidence: scored.evidence,
+    matches: scored.evidence,
+    gaps,
+    model,
+    reused: false,
+  };
 }

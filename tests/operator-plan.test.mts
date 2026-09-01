@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { conflictsWith, nextFreeSlot, parsePlanningNote } from "../lib/operator/calendar.ts";
+import { conflictsWith, formatConflictCallout, nextFreeSlot, overlapClusters, parsePlanningNote } from "../lib/operator/calendar.ts";
 import { buildCouncilProposals } from "../lib/operator/council.ts";
 import { assembleOperatorContext } from "../lib/operator/context.ts";
 import { runOperatorEvals } from "../lib/operator/evals.ts";
@@ -48,6 +48,34 @@ test("calendar intelligence skips busy gaps and parses notes", () => {
   assert.equal(parsed.hour, 16);
 });
 
+test("overlap detection surfaces three events at 10:00 and skips the cluster", () => {
+  const cluster = [
+    { id: "gym", title: "Gym", startAt: "2026-09-01T10:00:00+05:30", endAt: "2026-09-01T11:00:00+05:30", state: "synced", ownership: "external_fixed" },
+    { id: "staff", title: "Staff meeting", startAt: "2026-09-01T10:00:00+05:30", endAt: "2026-09-01T10:45:00+05:30", state: "synced", ownership: "external_fixed" },
+    { id: "focus", title: "Convert to interviews", startAt: "2026-09-01T10:00:00+05:30", endAt: "2026-09-01T10:45:00+05:30", state: "scheduled", ownership: "operator_created" },
+  ];
+  const found = overlapClusters(cluster, "2026-09-01", "Asia/Kolkata");
+  assert.equal(found.length, 1);
+  assert.equal(found[0].count, 3);
+  assert.deepEqual(found[0].titles, ["Convert to interviews", "Gym", "Staff meeting"]);
+  assert.equal(formatConflictCallout(found[0], "Asia/Kolkata"), "3 events overlap at 10:00");
+  const withMorningBusy = [
+    { id: "warmup", title: "Warmup", startAt: "2026-09-01T09:00:00+05:30", endAt: "2026-09-01T10:00:00+05:30", state: "synced" },
+    ...cluster,
+  ];
+  const slot = nextFreeSlot(withMorningBusy, 45, new Date("2026-09-01T03:30:00Z"));
+  assert.equal(slot.startAt, "2026-09-01T11:00:00+05:30");
+  const lateIst = [
+    { id: "late", title: "Late IST", startAt: "2026-09-01T02:00:00+05:30", endAt: "2026-09-01T03:00:00+05:30", state: "synced" },
+    { id: "also", title: "Also late", startAt: "2026-09-01T02:00:00+05:30", endAt: "2026-09-01T02:30:00+05:30", state: "synced" },
+  ];
+  assert.equal(overlapClusters(lateIst, "2026-09-01", "Asia/Kolkata").length, 1);
+  assert.equal(overlapClusters(lateIst, "2026-09-01", "America/New_York").length, 0);
+  assert.equal(overlapClusters(lateIst, "2026-08-31", "America/New_York").length, 1);
+  const nySlot = nextFreeSlot(cluster, 45, new Date("2026-09-01T13:00:00Z"), "America/New_York");
+  assert.match(nySlot.startAt, /2026-09-01T09:00:00-0[45]:00/);
+});
+
 test("council proposals cite the live high-fit job", () => {
   const context = assembleOperatorContext({
     now: "2026-09-01T04:00:00Z",
@@ -84,6 +112,11 @@ test("live system prompt keeps the agent voice and appends the JSON contract", (
   assert.match(composed, /"version":1/);
   assert.equal(composeLiveSystemPrompt("same", "same"), "same");
   assert.equal(composeLiveSystemPrompt("", "contract only"), "contract only");
+  const deduped = composeLiveSystemPrompt(
+    "You are Tyrion.\nReturn JSON only that matches the supplied plan schema.",
+    "Return JSON only that matches the supplied plan schema.\nKeep summary under 280 characters.",
+  );
+  assert.equal(deduped.split("Return JSON only that matches the supplied plan schema.").length - 1, 1);
 });
 
 test("DeepSeek is the live model while OpenAI is paused", () => {
@@ -94,6 +127,7 @@ test("DeepSeek is the live model while OpenAI is paused", () => {
   assert.deepEqual(liveProviderOrder(true, false), []);
   assert.deepEqual(liveProviderOrder(false, false), []);
   assert.equal(MODEL_ROUTES.startup_validate.task, "startup_validate");
+  assert.equal(MODEL_ROUTES.startup_challenge.task, "startup_challenge");
 });
 
 test("priority ids stay unique when career work shares a goal", () => {
@@ -119,6 +153,31 @@ test("priority ids stay unique when career work shares a goal", () => {
   }));
   const ids = plan.priorities.map(item => item.id);
   assert.equal(new Set(ids).size, ids.length);
+});
+
+test("deterministic plan signals a 10:00 conflict cluster", () => {
+  const plan = buildDeterministicPlan(assembleOperatorContext({
+    now: "2026-09-01T04:00:00Z",
+    workspace: {
+      calendar: [
+        { id: "gym", title: "Gym", start_at: "2026-09-01T10:00:00+05:30", end_at: "2026-09-01T11:00:00+05:30", state: "synced", ownership: "external_fixed", source: "google_calendar" },
+        { id: "staff", title: "Staff meeting", start_at: "2026-09-01T10:00:00+05:30", end_at: "2026-09-01T10:45:00+05:30", state: "synced", ownership: "external_fixed", source: "google_calendar" },
+        { id: "focus", title: "Convert to interviews", start_at: "2026-09-01T10:00:00+05:30", end_at: "2026-09-01T10:45:00+05:30", state: "scheduled", ownership: "operator_created", source: "local" },
+      ],
+      jobs: [],
+      learningItems: [],
+      startupIdeas: [],
+      contentIdeas: [],
+      connectors: [],
+      planningNotes: [],
+      calendarPreferences: [{ timezone: "Asia/Kolkata" }],
+    },
+  }));
+  const signal = plan.signals.find(item => item.id === "signal-conflicts");
+  assert.equal(signal?.title, "3 events overlap at 10:00");
+  assert.match(String(signal?.detail), /Gym/);
+  assert.match(String(signal?.detail), /Staff meeting/);
+  assert.match(String(signal?.detail), /Convert to interviews/);
 });
 
 test("ICS parser keeps timed events in the planning window", () => {

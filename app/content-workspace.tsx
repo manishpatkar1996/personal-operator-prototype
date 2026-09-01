@@ -6,8 +6,10 @@ import {
   evaluateDraftCraft,
   formatLabel,
   parseContentFormat,
+  voiceBannerLine,
   type ContentFormat,
 } from "@/lib/operator/content-craft";
+import { contentGenerateCopy } from "@/lib/operator/model-status";
 import { FormEvent, useEffect, useMemo, useState, type ComponentType } from "react";
 
 type CaptureBarProps = { placeholder: string; submitLabel: string; onSubmit: (text: string) => Promise<void> };
@@ -40,15 +42,17 @@ export function ContentWorkspace({
   mutate,
   refresh,
   CaptureBar,
+  modelReady = false,
 }: {
   data: WorkspaceSlice;
   mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>;
   refresh: () => Promise<void>;
   CaptureBar: ComponentType<CaptureBarProps>;
+  modelReady?: boolean;
 }) {
   const strategy = data.contentStrategy[0];
   const [thesis, setThesis] = useState(String(strategy?.thesis ?? ""));
-  const [setupOpen, setSetupOpen] = useState(!String(strategy?.thesis ?? "").trim());
+  const [setupOpen, setSetupOpen] = useState(false);
   const [selectedId, setSelectedId] = useState(String(data.contentIdeas[0]?.id ?? ""));
   const idea = data.contentIdeas.find(item => String(item.id) === selectedId) ?? data.contentIdeas[0];
   const [workingNotes, setWorkingNotes] = useState(String(idea?.working_notes ?? idea?.notes_text ?? ""));
@@ -192,6 +196,7 @@ export function ContentWorkspace({
     }
   }
 
+  const generateState = contentGenerateCopy(modelReady);
   const linkedin = (strategy?.linkedinCraft ?? {}) as Record<string, unknown>;
   const medium = (strategy?.mediumCraft ?? {}) as Record<string, unknown>;
   const voice = (strategy?.voice ?? {}) as Record<string, unknown>;
@@ -209,14 +214,6 @@ export function ContentWorkspace({
         <p className="lede">Dump an idea, pick LinkedIn or Medium, generate, then edit the full draft in one place. Publishing stays a copy-out.</p>
       </div>
     </header>
-    <article className="box strategy-banner">
-      <div>
-        <span className="label">CONTENT STRATEGY · {strategy?.source_name ? statusLabel(String(strategy.source_name)) : "Working thesis"}</span>
-        <h2>{String(strategy?.thesis ?? "Practical thinking on AI products, agentic workflows, and building with high ownership.")}</h2>
-        <p className="strategy-voice">{String(voice.name ?? "Manish Patkar")} · {String(voice.role ?? "Senior PM, athenahealth")} · targeting {String(voice.target ?? "Senior/Lead/Principal PM, AI")}</p>
-      </div>
-      <span className="state-chip">{strategy?.source_name ? "Craft loaded" : "Working thesis"}</span>
-    </article>
     <section className="content-capture">
       <div className="format-switch" role="tablist" aria-label="Format for the next idea">
         <button type="button" className={captureFormat === "linkedin_post" ? "active" : ""} onClick={() => setCaptureFormat("linkedin_post")}>LinkedIn posting</button>
@@ -226,7 +223,7 @@ export function ContentWorkspace({
       <CaptureBar placeholder={captureFormat === "medium_article" ? "Dump the article idea…" : "Dump a LinkedIn idea, a riff, or a proof point…"} submitLabel="Capture idea" onSubmit={capture} />
     </section>
     <details className="setup-panel" open={setupOpen} onToggle={event => { const next = event.currentTarget.open; if (next !== setupOpen) setSetupOpen(next); }}>
-      <summary><span>Samwell · Content strategy & craft</span><small>Injected into notes, draft, and chat — not the primary canvas</small></summary>
+      <summary><span>Samwell · Content strategy & craft</span><small>{voiceBannerLine(voice)}</small></summary>
       <form className="box inline-form" onSubmit={importStrategy}>
         <label>Import or replace thesis<textarea value={thesis} onChange={event => setThesis(event.target.value)} placeholder="Paste the authoritative content strategy here." /></label>
         <button className="primary">Save thesis</button>
@@ -258,7 +255,7 @@ export function ContentWorkspace({
       </article>}
     </details>
     <div className="workspace-split content-split">
-      <aside className="memory-nav idea-rail">{data.contentIdeas.map(item => <button key={String(item.id)} className={item.id === idea?.id ? "active" : ""} onClick={() => setSelectedId(String(item.id))}><strong>{String(item.title)}</strong><small>{statusLabel(String(item.status))} · {formatLabel(parseContentFormat(item.format))}</small></button>)}</aside>
+      <aside className="idea-rail" aria-label="Ideas">{data.contentIdeas.map(item => <div key={String(item.id)} className={`idea-row${item.id === idea?.id ? " is-selected" : ""}`}><button type="button" onClick={() => setSelectedId(String(item.id))}><strong>{String(item.title)}</strong><small>{statusLabel(String(item.status))} · {formatLabel(parseContentFormat(item.format))}</small></button></div>)}</aside>
       {idea ? <article className="box content-desk">
         <div className="desk-head">
           <div>
@@ -282,7 +279,7 @@ export function ContentWorkspace({
           <summary><span>Angle notes · optional</span><small>Not the post. Proof, claims to avoid, then generate.</small></summary>
           <label className="notes-field">Working notes<textarea value={workingNotes} onChange={event => setWorkingNotes(event.target.value)} placeholder="Angle, one proof, claims to avoid." /></label>
           <div className="actions">
-            <button disabled={Boolean(busy)} onClick={() => void generate("notes")}>Generate notes</button>
+            <button disabled={Boolean(busy) || !generateState.enabled} onClick={() => void generate("notes")}>Generate notes</button>
             <button disabled={!workingNotes.trim()} onClick={() => void saveWorkingNotes()}>Save notes</button>
           </div>
         </details>
@@ -294,7 +291,7 @@ export function ContentWorkspace({
                 <strong>Draft · edit here</strong>
                 <p>This is the posting. Read it, change it, then copy it out. There is no second preview.</p>
               </div>
-              <button className="primary" disabled={Boolean(busy)} onClick={() => void generate("content")}>Generate {formatLabel(format)}</button>
+              <button className="primary" disabled={Boolean(busy) || !generateState.enabled} onClick={() => void generate("content")}>Generate {formatLabel(format)}</button>
             </div>
             <label className="draft-label">
               <span className="draft-meta">{draftLengthLabel(draft, format)}</span>
@@ -322,6 +319,7 @@ export function ContentWorkspace({
               <button disabled={!draft.trim()} onClick={() => void copyOut()}>Copy for {format === "medium_article" ? "Medium" : "LinkedIn"}</button>
             </div>
             <p className="copy-out-note">Publishing stays a human copy-out. Samwell never posts.</p>
+            {!generateState.enabled && <p className="copy-out-note">{generateState.hint}</p>}
             {busy && <small className="config-message">{busy}</small>}
             {message && <small className="config-message">{message}</small>}
           </div>

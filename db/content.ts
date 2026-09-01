@@ -4,6 +4,7 @@ import {
   DEFAULT_CONTENT_VOICE,
   DEFAULT_LINKEDIN_CRAFT,
   DEFAULT_MEDIUM_CRAFT,
+  GENERIC_CONTENT_THESIS,
   appendTasteLog,
   contentStatusAfterEdit,
   contentStatusAfterGenerate,
@@ -23,6 +24,8 @@ import {
   type LinkedInCraft,
   type MediumCraft,
 } from "@/lib/operator/content-craft";
+import { getMeta } from "./operator-meta";
+import { WORKSPACE_KIND_KEY } from "@/lib/operator/operator-setup";
 
 function db() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
@@ -71,7 +74,7 @@ export async function ensureContentColumns() {
   if (!ideaColumns.has("generated_draft")) await database.prepare("ALTER TABLE content_ideas ADD COLUMN generated_draft TEXT NOT NULL DEFAULT ''").run();
   if (!ideaColumns.has("working_notes")) await database.prepare("ALTER TABLE content_ideas ADD COLUMN working_notes TEXT NOT NULL DEFAULT ''").run();
   if (!ideaColumns.has("feedback_text")) await database.prepare("ALTER TABLE content_ideas ADD COLUMN feedback_text TEXT NOT NULL DEFAULT ''").run();
-  await database.prepare("INSERT OR IGNORE INTO content_strategy (id,thesis,source_name) VALUES ('primary','Practical thinking on AI products, agentic workflows, and building with high ownership.','Working thesis')").run();
+  await database.prepare("INSERT OR IGNORE INTO content_strategy (id,thesis,source_name) VALUES ('primary',?,'Working thesis')").bind(GENERIC_CONTENT_THESIS).run();
   await database.prepare("CREATE TABLE IF NOT EXISTS operator_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)").run();
   const revision = await database.prepare("SELECT value FROM operator_meta WHERE key='content_craft_revision'").first<{ value: string }>();
   if (Number(revision?.value ?? 0) < 1) {
@@ -86,6 +89,21 @@ export async function ensureContentColumns() {
     ).run();
     await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('content_craft_revision','1')").run();
   }
+  if (Number((await database.prepare("SELECT value FROM operator_meta WHERE key='content_craft_revision'").first<{ value: string }>())?.value ?? 0) < 2) {
+    const kind = await getMeta(WORKSPACE_KIND_KEY);
+    if (kind !== "personal") {
+      await database.prepare("UPDATE content_strategy SET thesis=?,source_name='Working thesis',voice_json=?,taste_json='[]',updated_at=CURRENT_TIMESTAMP WHERE id='primary'")
+        .bind(GENERIC_CONTENT_THESIS, JSON.stringify(DEFAULT_CONTENT_VOICE)).run();
+    }
+    await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('content_craft_revision','2')").run();
+  }
+}
+
+export async function resetContentStrategyToGeneric() {
+  await ensureContentColumns();
+  await db().prepare(`UPDATE content_strategy SET
+    thesis=?, source_name='Working thesis', voice_json=?, taste_json='[]', updated_at=CURRENT_TIMESTAMP
+    WHERE id='primary'`).bind(GENERIC_CONTENT_THESIS, JSON.stringify(DEFAULT_CONTENT_VOICE)).run();
 }
 
 function mapStrategy(row: {
@@ -263,13 +281,14 @@ export async function saveContentDraft(id: string, draft: string) {
 }
 
 async function payloadFor(idea: IdeaRow, strategy: ContentStrategy | null) {
+  const format = parseContentFormat(idea.format);
   return {
     idea: {
       id: idea.id,
       title: idea.title,
       pillar: idea.pillar,
-      format: parseContentFormat(idea.format),
-      formatLabel: formatLabel(parseContentFormat(idea.format)),
+      format,
+      formatLabel: formatLabel(format),
       notes: idea.notes_text,
       workingNotes: idea.working_notes,
       feedback: idea.feedback_text,
@@ -277,9 +296,6 @@ async function payloadFor(idea: IdeaRow, strategy: ContentStrategy | null) {
     strategy: strategy ? {
       thesis: strategy.thesis,
       sourceName: strategy.source_name,
-      voice: strategy.voice,
-      linkedinCraft: strategy.linkedinCraft,
-      mediumCraft: strategy.mediumCraft,
     } : null,
   };
 }
@@ -364,7 +380,5 @@ export async function draftContent(id: string) {
 }
 
 export async function generateContent(id: string) {
-  const outlined = await outlineContent(id);
-  const drafted = await draftContent(id);
-  return { ...drafted, outline: drafted.outline.length ? drafted.outline : outlined.outline };
+  return draftContent(id);
 }

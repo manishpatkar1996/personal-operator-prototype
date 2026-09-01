@@ -3,18 +3,23 @@
 import { OPERATOR_AGENTS } from "@/lib/operator/agents";
 import { DEEPSEEK_LIVE, OPENAI_LIVE } from "@/lib/operator/models";
 import { CaptureComposer } from "./capture-composer";
-import { JobResumeVariant } from "./career-resume-variant";
+import { JobCareerMatch } from "./career-match";
 import { ContentWorkspace } from "./content-workspace";
-import { calendarControlsStartOpen, calendarReadStatus, visibleTimelineBlocks } from "@/lib/operator/calendar";
+import { GoalsJsonPanel, OperatorSetup } from "./operator-setup";
+import { StartupLab } from "./startup-lab";
+import { asTimeBlock, calendarControlsStartOpen, calendarDayStamp, calendarReadStatus, formatConflictCallout, formatConflictRange, formatInTimezone, occupiesCalendarDay, overlapClusters, preferredTimezone, visibleTimelineBlocks } from "@/lib/operator/calendar";
 import { rankCareerEmails } from "@/lib/operator/career-email";
 import { splitFocusPrograms } from "@/lib/operator/focus-nav";
 import { isQuotaSalesRole } from "@/lib/operator/job-relevance";
+import { COMPANY_BOARD_PROVIDERS, SEARCH_IMPORT_CAP } from "@/lib/operator/job-search";
 import { queuedLearningMinutes, weekLearningQueue } from "@/lib/operator/learning-taste";
 import { memoryDisplayBody, type PresentedMemoryNote } from "@/lib/operator/memory-notes";
-import { THESIS_FIELDS, emptyThesisFields, nextThesisGap, parseThesisClarity, thesisCompleteness, thesisFieldsFromRow, type ThesisFields } from "@/lib/operator/startup-thesis";
+import { modelGuideCopy, sidebarModelCopy } from "@/lib/operator/model-status";
+import { isSampleJob } from "@/lib/operator/operator-setup";
+import { MIN_RESUME_CHARS } from "@/lib/operator/scoring";
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
-type View = "Today" | "Goals" | "Career" | "Learning" | "Startup Lab" | "Content" | "Memory" | "Small Council";
+type View = "Today" | "Goals" | "Career" | "Learning" | "Startup Lab" | "Content" | "Memory" | "Small Council" | "Setup";
 type GoalState = "active" | "paused" | "completed" | "archived";
 type MilestoneStatus = "not_started" | "ready" | "active" | "blocked" | "achieved" | "skipped";
 
@@ -52,7 +57,7 @@ type WorkspaceData = {
   planningNotes: Record<string, unknown>[]; connectors: Record<string, unknown>[]; contentStrategy: Record<string, unknown>[];
 };
 
-const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+const today = new Intl.DateTimeFormat("en-CA", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
 const PROGRAM_VIEWS: View[] = ["Career", "Learning", "Startup Lab", "Content"];
 const FOCUS_NAV_KEY = "operator-focus-nav";
 
@@ -91,39 +96,8 @@ type PlanPriority = { id: string; rank: number; domain: string; title: string; r
 type PlanSignal = { id: string; category: string; domain: string; title: string; detail: string };
 type PlanPayload = {
   plan?: { summary: string; generation?: { mode: string; provider?: string; fallbackReason?: string }; priorities?: PlanPriority[]; signals?: PlanSignal[] };
-  model?: { status: string; provider?: string; reason?: string };
+  model?: { status: string; provider?: string; reason?: string; keyReady?: boolean };
 };
-
-function modelGuideCopy(model?: PlanPayload["model"]) {
-  if (!model || model.status === "used") return null;
-  const reason = model.reason ?? "";
-  if (model.status === "disabled" || /not configured|OPENAI_API_KEY|DEEPSEEK_API_KEY|No configured model/i.test(reason)) {
-    return {
-      title: "Running on local rules",
-      lead: OPENAI_LIVE || DEEPSEEK_LIVE
-        ? "No live model key is loaded. Rankings, the daily plan, calendar approvals, and your edits still work."
-        : "Live models are paused. Rankings, the daily plan, calendar approvals, and your edits still work.",
-      fix: OPENAI_LIVE || DEEPSEEK_LIVE
-        ? "Add OPENAI_API_KEY to .dev.vars for the primary model, and DEEPSEEK_API_KEY for fallback when OpenAI is down. Restart the dev server after saving. Never paste keys into chat."
-        : "Seeded and deterministic results stay in charge. Keys can remain in .dev.vars — live calls resume when the pause flags are flipped.",
-    };
-  }
-  if (/429/.test(reason)) {
-    return {
-      title: "Live models did not respond",
-      lead: "OpenAI is rate-limited, and DeepSeek did not take over. Local rules are covering Today so you can keep working.",
-      fix: "Confirm DEEPSEEK_API_KEY is in .dev.vars, or wait and retry OpenAI. Never paste keys into chat.",
-    };
-  }
-  if (model.status === "fallback" || reason) {
-    return {
-      title: "Models unavailable",
-      lead: reason || "OpenAI and DeepSeek did not return a usable result. Local rules are filling in.",
-      fix: "Retry when an API is healthy. Goals, calendar approvals, and boards do not need a live model.",
-    };
-  }
-  return null;
-}
 
 function ModelGuide({ model, onRetry }: { model?: PlanPayload["model"]; onRetry: () => void }) {
   const copy = modelGuideCopy(model);
@@ -136,28 +110,17 @@ function ModelGuide({ model, onRetry }: { model?: PlanPayload["model"]; onRetry:
   if (!copy || hidden) return null;
   return <aside className="model-guide">
     <div>
-      <span className="label">WHILE MODELS ARE PAUSED</span>
+      <span className="label">MODEL STATUS</span>
       <h2>{copy.title}</h2>
       <p>{copy.lead}</p>
       <p>{copy.fix}</p>
-      <small>Still works: Today, goals, calendar approvals, the career board, memory edits. Paused or local-only: live résumé variants, drafts, research, collection, council review.</small>
+      <small>Still works: Today, goals, calendar approvals, the career board, memory edits. Live only when a model key is ready: drafts, research, council review, Refresh with model.</small>
     </div>
     <div className="actions">
-      <button className="primary" onClick={onRetry}>Retry models</button>
+      {copy.retry ? <button className="primary" onClick={onRetry}>Refresh with model</button> : null}
       <button className="link" onClick={() => { try { sessionStorage.setItem("operator-model-guide", token); } catch { /* ignore */ } setHidden(true); }}>Continue on local rules</button>
     </div>
   </aside>;
-}
-
-function asList(value: unknown) {
-  if (Array.isArray(value)) return value.map(String);
-  if (typeof value === "string" && value.trim()) {
-    try {
-      const parsed: unknown = JSON.parse(value);
-      return Array.isArray(parsed) ? parsed.map(String) : [];
-    } catch { return []; }
-  }
-  return [];
 }
 
 function agentFor(program: string) {
@@ -256,7 +219,8 @@ function GoalList({ goals, selectedId, select }: { goals: Goal[]; selectedId?: s
   </aside>;
 }
 
-function GoalForm({ close, created }: { close: () => void; created: (id: string) => void }) {
+function GoalForm({ close, created, imported, existing, demo }: { close: () => void; created: (id: string) => void; imported: () => Promise<void>; existing: Goal[]; demo?: boolean }) {
+  const [mode, setMode] = useState<"one" | "pack">("one");
   const [goal, setGoal] = useState<GoalDraft>({ title: "", desiredOutcome: "", successCriteria: "", targetDate: addDays(90), priority: 3, state: "active" });
   const [milestones, setMilestones] = useState<NewMilestone[]>([{ title: "", completionRule: "", targetDate: addDays(30), weight: 1, completionPercentage: 0, status: "not_started", position: 0 }]);
   const [saving, setSaving] = useState(false);
@@ -272,8 +236,13 @@ function GoalForm({ close, created }: { close: () => void; created: (id: string)
     } catch (caught) { setError(caught instanceof Error ? caught.message : "Could not create the goal"); setSaving(false); }
   }
 
-  return <div className="drawer-backdrop" role="presentation"><form className="drawer" onSubmit={submit}>
-    <div className="drawer-head"><div><span className="eyebrow">New goal</span><h2>Define the outcome</h2></div><button type="button" className="icon-button" onClick={close} aria-label="Close">×</button></div>
+  return <div className="drawer-backdrop" role="presentation"><div className="drawer">
+    <div className="drawer-head"><div><span className="eyebrow">New goal</span><h2>{mode === "one" ? "Define the outcome" : "Paste a JSON pack"}</h2></div><button type="button" className="icon-button" onClick={close} aria-label="Close">×</button></div>
+    <div className="goal-mode-switch" role="tablist" aria-label="How to add goals">
+      <button type="button" role="tab" aria-selected={mode === "one"} className={mode === "one" ? "active" : ""} onClick={() => setMode("one")}>Add one</button>
+      <button type="button" role="tab" aria-selected={mode === "pack"} className={mode === "pack" ? "active" : ""} onClick={() => setMode("pack")}>Paste JSON pack</button>
+    </div>
+    {mode === "pack" ? <GoalsJsonPanel embedded existing={existing} demo={demo} onImported={imported} /> : <form className="goal-create" onSubmit={submit}>
     <label>Goal title<input required value={goal.title} onChange={event => setGoal({ ...goal, title: event.target.value })} placeholder="Land a high-agency AI product role" /></label>
     <label>Desired outcome<textarea required value={goal.desiredOutcome} onChange={event => setGoal({ ...goal, desiredOutcome: event.target.value })} placeholder="What should be different when this is complete?" /></label>
     <label>Success criteria<textarea required value={goal.successCriteria} onChange={event => setGoal({ ...goal, successCriteria: event.target.value })} placeholder="What evidence will prove the goal is achieved?" /></label>
@@ -284,7 +253,8 @@ function GoalForm({ close, created }: { close: () => void; created: (id: string)
     </div>)}
     {error && <p className="form-error">{error}</p>}
     <div className="drawer-actions"><button type="button" onClick={close}>Cancel</button><button className="primary" disabled={saving}>{saving ? "Creating…" : "Create goal"}</button></div>
-  </form></div>;
+  </form>}
+  </div></div>;
 }
 
 function GoalContract({ goal, changed }: { goal: Goal; changed: () => void }) {
@@ -370,12 +340,12 @@ function GoalsPage({ goals, selectedId, select, refresh, addGoal }: { goals: Goa
   const selected = goals.find(goal => goal.id === selectedId) ?? goals[0];
 
   return <>
-    <Heading eyebrow={`${goals.filter(goal => goal.state === "active").length} active goals`} title="Keep the contract current" copy="Update the next milestone. Progress is the weighted percentage of dated outcomes—not a count of activity." action={<button className="primary" onClick={addGoal}>+ Add goal</button>} />
-    {!selected ? <article className="box empty"><h2>No goals yet</h2><p>Create your first outcome and define how you will know it is achieved.</p><button className="primary" onClick={addGoal}>Create a goal</button></article> : <div className="goals-layout"><GoalList goals={goals} selectedId={selected.id} select={id => { setAddingMilestone(false); select(id); }} /><div className="goal-detail"><GoalContract key={selected.id} goal={selected} changed={refresh} /><article className="box milestone-panel"><div className="between"><div><span className="label">MILESTONES · {selected.milestones.length}</span><h2>Dated outcomes</h2></div><button onClick={() => setAddingMilestone(true)}>+ Add milestone</button></div><div className="milestone-table">{selected.milestones.map(milestone => <MilestoneEditor key={`${milestone.id}-${milestone.completionPercentage}-${milestone.status}-${milestone.targetDate}-${milestone.weight}`} milestone={milestone} saved={refresh} removed={refresh} />)}</div>{addingMilestone && <AddMilestone goal={selected} saved={refresh} close={() => setAddingMilestone(false)} />}{!selected.milestones.length && !addingMilestone && <p className="empty-line">This goal needs at least one dated milestone before it can be planned.</p>}</article></div></div>}
+    <Heading eyebrow={`${goals.filter(goal => goal.state === "active").length} active goals`} title="Keep the contract current" copy="Update the next milestone. Progress is the weighted percentage of dated outcomes—not a count of activity. Add one goal or paste a JSON pack from + Add goal." action={<button className="primary" onClick={addGoal}>+ Add goal</button>} />
+    {!selected ? <article className="box empty"><h2>No goals yet</h2><p>Create your first outcome and define how you will know it is achieved. You can also paste a JSON pack from + Add goal.</p><button className="primary" onClick={addGoal}>Create a goal</button></article> : <div className="goals-layout"><GoalList goals={goals} selectedId={selected.id} select={id => { setAddingMilestone(false); select(id); }} /><div className="goal-detail"><GoalContract key={selected.id} goal={selected} changed={refresh} /><article className="box milestone-panel"><div className="between"><div><span className="label">MILESTONES · {selected.milestones.length}</span><h2>Dated outcomes</h2></div><button onClick={() => setAddingMilestone(true)}>+ Add milestone</button></div><div className="milestone-table">{selected.milestones.map(milestone => <MilestoneEditor key={`${milestone.id}-${milestone.completionPercentage}-${milestone.status}-${milestone.targetDate}-${milestone.weight}`} milestone={milestone} saved={refresh} removed={refresh} />)}</div>{addingMilestone && <AddMilestone goal={selected} saved={refresh} close={() => setAddingMilestone(false)} />}{!selected.milestones.length && !addingMilestone && <p className="empty-line">This goal needs at least one dated milestone before it can be planned.</p>}</article></div></div>}
   </>;
 }
 
-function TodayPage({ goals, data, mutate, planPayload, openProgram }: { goals: Goal[]; data: WorkspaceData; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>; planPayload: PlanPayload | null; openProgram: (view: View, goalId?: string) => void }) {
+function TodayPage({ goals, data, mutate, planPayload, openProgram, sampleData, refreshWithModel, planning }: { goals: Goal[]; data: WorkspaceData; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>; planPayload: PlanPayload | null; openProgram: (view: View, goalId?: string) => void; sampleData?: boolean; refreshWithModel: () => Promise<void>; planning?: boolean }) {
   const [capacity, setCapacity] = useState<{ remainingMinutes?: number; nextSlot?: { startAt: string } } | null>(null);
   const candidates = goals.flatMap(goal => goal.milestones.map(milestone => ({ goal, milestone, score: goal.priority * 10 + Math.max(0, 20 - Math.ceil((new Date(milestone.targetDate).getTime() - Date.now()) / 86_400_000)) + (100 - milestone.completionPercentage) / 10 }))).filter(item => item.goal.state === "active" && item.milestone.completionPercentage < 100 && item.milestone.status !== "skipped").sort((a, b) => b.score - a.score).slice(0, 3);
   const planPriorities = planPayload?.plan?.priorities ?? [];
@@ -383,22 +353,26 @@ function TodayPage({ goals, data, mutate, planPayload, openProgram }: { goals: G
   const rawAllocations = planPriorities.map(item => Math.round(item.estimatedMinutes / minuteTotal * 100));
   const priorAllocation = rawAllocations.slice(0, -1).reduce((sum, value) => sum + value, 0);
   const priorities = planPriorities.map((item, index) => ({ ...item, allocation: index === planPriorities.length - 1 ? 100 - priorAllocation : rawAllocations[index] }));
-  const todayRows = data.calendar.filter(item => String(item.start_at).slice(0, 10) === today);
+  const preference = data.calendarPreferences[0];
+  const timeZone = preferredTimezone(preference?.timezone);
+  const todayStamp = calendarDayStamp(timeZone);
+  const icsConfigured = Number(preference?.ics_configured ?? 0) === 1;
+  const todayRows = data.calendar.filter(item => occupiesCalendarDay(asTimeBlock(item), todayStamp, timeZone));
   const calendar = visibleTimelineBlocks(todayRows);
+  const conflictClusters = overlapClusters(calendar.map(asTimeBlock), todayStamp, timeZone);
+  const conflictIds = new Set(conflictClusters.flatMap(cluster => cluster.ids));
   const calendarMinutes = calendar.reduce((total, item) => total + Math.max(0, (new Date(String(item.end_at)).getTime() - new Date(String(item.start_at)).getTime()) / 60_000), 0);
   const calendarHours = `${Math.floor(calendarMinutes / 60)}h ${Math.round(calendarMinutes % 60)}m`;
-  const preference = data.calendarPreferences[0];
-  const icsConfigured = Number(preference?.ics_configured ?? 0) === 1;
   const hasGoogleEventsToday = todayRows.some(item => item.source === "google_calendar" && String(item.state) !== "dismissed");
   const googleEventCount = data.calendar.filter(item => item.source === "google_calendar" && String(item.state) !== "dismissed").length;
   const readStatus = calendarReadStatus({ icsConfigured, googleEventCount, todayBlockCount: calendar.length });
-  const dateHeading = new Intl.DateTimeFormat("en-IN", { weekday: "long", day: "numeric", month: "long", timeZone: "Asia/Kolkata" }).format(new Date());
+  const dateHeading = formatInTimezone(new Date(), timeZone, { weekday: "long", day: "numeric", month: "long" });
   const initialFocusStart = () => { const value = new Date(Date.now() + 86_400_000); value.setHours(10, 0, 0, 0); return new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 16); };
   const [focusMilestoneId, setFocusMilestoneId] = useState(candidates[0]?.milestone.id ?? "");
   const [focusTitle, setFocusTitle] = useState(candidates[0]?.milestone.title ?? "Goal focus block");
   const [focusStart, setFocusStart] = useState(initialFocusStart);
   const [focusDuration, setFocusDuration] = useState(45);
-  const [calendarOpen, setCalendarOpen] = useState(() => calendarControlsStartOpen(icsConfigured, hasGoogleEventsToday));
+  const [calendarOpen, setCalendarOpen] = useState(() => calendarControlsStartOpen(icsConfigured, hasGoogleEventsToday, readStatus.kind));
   const [icsUrl, setIcsUrl] = useState("");
   const calendarPolicy = String(preference?.policy ?? "auto_create");
   const openCalendarBlocks = data.calendar.filter(item => ["proposed", "approved_pending", "write_failed"].includes(String(item.state)));
@@ -420,15 +394,17 @@ function TodayPage({ goals, data, mutate, planPayload, openProgram }: { goals: G
     await mutate("propose_calendar_block", { title: focusTitle, goalId: candidate?.goal.id, milestoneId: candidate?.milestone.id, startAt: start.toISOString(), endAt: end.toISOString() });
   }
 
-  return <><Heading eyebrow={dateHeading} title="Three moves for today" copy="Open a card to do the work. Approve any calendar time that needs you first." agent="Today" action={<button onClick={() => mutate("request_calendar_sync")}>Refresh</button>} />
+  return <><Heading eyebrow={dateHeading} title="Three moves for today" copy="Open a card to do the work. Approve any calendar time that needs you first." agent="Today" action={<div className="heading-actions"><button type="button" onClick={() => mutate("request_calendar_sync")}>Refresh</button><button type="button" className="primary" disabled={planning} onClick={() => void refreshWithModel()}>{planning ? "Refreshing…" : "Refresh with model"}</button></div>} />
+    {sampleData && <article className="box"><span className="label">SAMPLE DATA</span><h2>This laptop is still on the walkthrough pack</h2><p>Open You to paste your résumé and import goals JSON. Sample jobs and goals are not yours until you replace them.</p><button className="primary" type="button" onClick={() => openProgram("Setup")}>Make it yours</button></article>}
     <div className="today-summary box"><div><span className="label">RECOMMENDED SHAPE · {generation}</span><h2>{planPayload?.plan?.summary ?? "Loading today’s plan…"}</h2><p>{readStatus.kind === "live" ? `Google read is live. Today currently has ${calendar.length} blocks covering ${calendarHours}.` : readStatus.kind === "stale" ? `Showing ${calendar.length} blocks covering ${calendarHours}. ${readStatus.detail}` : `${readStatus.detail} Today currently has ${calendar.length} blocks covering ${calendarHours}.`}{typeof capacity?.remainingMinutes === "number" ? ` ${capacity.remainingMinutes} minutes of an 8-hour focus budget remain.` : ""}</p></div></div>
-    {openCalendarBlocks.length > 0 && <article className="box calendar-queue needs-you"><div className="between"><span className="label">NEEDS YOU · {openCalendarBlocks.length} calendar {openCalendarBlocks.length === 1 ? "block" : "blocks"}</span>{pendingWrites > 0 && <small>{pendingWrites} waiting for calendar worker</small>}</div>{openCalendarBlocks.map(item => <div key={String(item.id)}><span><strong>{String(item.title)}</strong><small>{new Intl.DateTimeFormat("en-IN", { weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit", timeZone:"Asia/Kolkata" }).format(new Date(String(item.start_at)))} · {statusLabel(String(item.state))}</small>{item.state === "write_failed" && <em>The calendar write failed and needs another review.</em>}</span>{item.state === "proposed" && <div className="actions"><button className="primary" onClick={() => mutate("review_calendar_block", { id: item.id, decision: "approve" })}>Approve & add</button><button onClick={() => mutate("review_calendar_block", { id: item.id, decision: "dismiss" })}>Dismiss</button></div>}{item.state === "write_failed" && <button onClick={() => mutate("retry_calendar_write", { id: item.id })}>Retry write</button>}</div>)}</article>}
+    {openCalendarBlocks.length > 0 && <article className="box calendar-queue needs-you"><div className="between"><span className="label">NEEDS YOU · {openCalendarBlocks.length} calendar {openCalendarBlocks.length === 1 ? "block" : "blocks"}</span>{pendingWrites > 0 && <small>{pendingWrites} waiting for calendar worker</small>}</div>{openCalendarBlocks.map(item => <div key={String(item.id)}><span><strong>{String(item.title)}</strong><small>{new Intl.DateTimeFormat("en-IN", { weekday:"short", day:"numeric", month:"short", hour:"2-digit", minute:"2-digit", timeZone: timeZone }).format(new Date(String(item.start_at)))} · {statusLabel(String(item.state))}</small>{item.state === "write_failed" && <em>The calendar write failed and needs another review.</em>}</span>{item.state === "proposed" && <div className="actions"><button className="primary" onClick={() => mutate("review_calendar_block", { id: item.id, decision: "approve" })}>Approve & add</button><button onClick={() => mutate("review_calendar_block", { id: item.id, decision: "dismiss" })}>Dismiss</button></div>}{item.state === "write_failed" && <button onClick={() => mutate("retry_calendar_write", { id: item.id })}>Retry write</button>}</div>)}</article>}
     <div className="priority-grid">{priorities.map((item, index) => { const destination = programForDomain(item.domain, item.title, item.goalId); return <button type="button" className="box priority-card" key={`${item.id}-${index}`} onClick={() => openProgram(destination, item.goalId)}><div className="priority-number">0{index + 1}</div><span className="label">{item.domain}</span><h2>{item.title}</h2><p>{item.reason}</p><div className="allocation"><strong>{item.allocation}%</strong><span><i style={{ width: `${item.allocation}%` }} /></span></div><small>{item.estimatedMinutes} min · {Math.round(item.confidence * 100)}% confidence{item.dueDate ? ` · due ${formatDate(item.dueDate)}` : ""}</small><em className="priority-open">Open {destination} →</em></button>; })}{priorities.length === 0 && <article className="box"><p>The plan will appear here once goals or roles are available.</p></article>}</div>
-    <article className="box"><div className="section-row"><div><span className="label">CALENDAR · TODAY</span><h2>Protect this time</h2></div><div className={`connector ${readStatus.kind === "live" ? "connected" : "not_connected"}`}><span>Google Calendar</span><b>{readStatus.label}</b><small>{readStatus.detail}</small></div></div><div className="timeline">{calendar.map(item => <div key={String(item.id)} className={String(item.ownership)}><time>{new Date(String(item.start_at)).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })}</time><span>{item.event_url ? <a href={String(item.event_url)} target="_blank" rel="noreferrer"><strong>{String(item.title)}</strong></a> : <strong>{String(item.title)}</strong>}<small>{item.source === "google_calendar" ? "Google Calendar" : statusLabel(String(item.ownership))} · {statusLabel(String(item.state))}</small></span></div>)}{calendar.length === 0 && <p className="empty-line">No calendar blocks are scheduled for today.</p>}</div>{(planPayload?.plan?.signals?.length ?? 0) > 0 || openEmailSignals.length > 0 ? <ul className="today-signals">{(planPayload?.plan?.signals ?? []).slice(0, 4).map(signal => <li key={signal.id}><b>{statusLabel(signal.category)}:</b> {signal.title}</li>)}{openEmailSignals.length > 0 && <li><b>Email:</b> {openEmailSignals.length} career signals need review.</li>}</ul> : null}</article>
+    {conflictClusters.length > 0 && <article className="box calendar-conflicts"><div className="between"><span className="label">CONFLICTS · {conflictClusters.reduce((sum, cluster) => sum + cluster.count, 0)} overlapping</span><small>{conflictClusters.length === 1 ? "Same-day intervals intersect" : `${conflictClusters.length} clusters`}</small></div>{conflictClusters.map(cluster => <div key={`${cluster.startAt}-${cluster.endAt}-${cluster.ids.join("|")}`}><span><strong>{formatConflictCallout(cluster, timeZone)}</strong><small>{formatConflictRange(cluster, timeZone)} · {cluster.titles.join(" · ")}</small></span></div>)}</article>}
+    <article className="box"><div className="section-row"><div><span className="label">CALENDAR · TODAY</span><h2>Protect this time</h2></div><div className={`connector ${readStatus.kind === "live" ? "connected" : "not_connected"}`}><span>Google Calendar</span><b>{readStatus.label}</b><small>{readStatus.detail}</small></div></div><div className="timeline">{calendar.map(item => <div key={String(item.id)} className={`${String(item.ownership)}${conflictIds.has(String(item.id)) ? " conflict" : ""}`}><time>{formatInTimezone(String(item.start_at), timeZone, { hour: "2-digit", minute: "2-digit" })}</time><span>{item.event_url ? <a href={String(item.event_url)} target="_blank" rel="noreferrer"><strong>{String(item.title)}</strong></a> : <strong>{String(item.title)}</strong>}<small>{item.source === "google_calendar" ? "Google Calendar" : item.source === "sample" ? "Sample" : statusLabel(String(item.ownership))} · {statusLabel(String(item.state))}{conflictIds.has(String(item.id)) ? " · Overlaps" : ""}</small></span></div>)}{calendar.length === 0 && <p className="empty-line">No calendar blocks are scheduled for today.</p>}</div>{(planPayload?.plan?.signals?.length ?? 0) > 0 || openEmailSignals.length > 0 ? <ul className="today-signals">{(planPayload?.plan?.signals ?? []).slice(0, 4).map(signal => <li key={signal.id}><b>{statusLabel(signal.category)}:</b> {signal.title}</li>)}{openEmailSignals.length > 0 && <li><b>Email:</b> {openEmailSignals.length} career signals need review.</li>}</ul> : null}</article>
     <SetupPanel title="Calendar controls" hint={icsConfigured ? "Autonomy, feed, and new goal blocks" : readStatus.kind === "stale" ? "Feed not saved — paste iCal to keep busy/free live" : "Connect Google Calendar via secret iCal URL"} open={calendarOpen} onOpenChange={setCalendarOpen}>
       <article className="box calendar-control">
         <form className="ics-connect" onSubmit={event => { event.preventDefault(); if (!icsUrl.trim()) return; void mutate("connect_calendar_ics", { icsUrl: icsUrl.trim() }).then(() => setIcsUrl("")); }}>
-          <div><span className="label">GOOGLE CALENDAR · READ</span><h2>{icsConfigured ? "Live calendar feed is saved" : "Read Google Calendar without a write worker"}</h2><p>In Google Calendar: Settings → your calendar → Integrate calendar → Secret address in iCal format. Paste that URL here. External events stay read-only. Operator blocks still land locally; Google writes remain queued.</p></div>
+          <div><span className="label">GOOGLE CALENDAR · READ</span><h2>{icsConfigured ? "Live calendar feed is saved" : "Read Google Calendar without a write worker"}</h2><p>In Google Calendar: Settings → your calendar → Integrate calendar → Secret address in iCal format. Paste that URL here. Same connect is also on You (Setup). External events stay read-only. Operator blocks still land locally; Google writes remain queued.</p></div>
           <label>Secret iCal URL<input type="url" value={icsUrl} onChange={event => setIcsUrl(event.target.value)} placeholder={icsConfigured ? "Saved. Paste a new URL to replace it." : "https://calendar.google.com/calendar/ical/…/basic.ics"} /></label>
           <button className="primary">{icsConfigured ? "Replace feed" : "Connect calendar"}</button>
         </form>
@@ -447,14 +423,8 @@ function TodayPage({ goals, data, mutate, planPayload, openProgram }: { goals: G
 function CareerOnboarding({ onSaved }: { onSaved: () => Promise<void> }) {
   const [profile, setProfile] = useState<Record<string, unknown> | null>(null);
   const [message, setMessage] = useState("");
-  const [setupOpen, setSetupOpen] = useState(true);
-  const [hydrated, setHydrated] = useState(false);
+  const [setupOpen, setSetupOpen] = useState(false);
   useEffect(() => { void fetch("/api/career/profile").then(response => response.json()).then(result => setProfile(result.profile)); }, []);
-  useEffect(() => {
-    if (!profile || hydrated) return;
-    setSetupOpen(profile.onboardingStatus !== "complete" && String(profile.resumeText ?? "").length < 80);
-    setHydrated(true);
-  }, [profile, hydrated]);
   const list = (value: unknown) => Array.isArray(value) ? value.join(", ") : "";
   const split = (value: string) => value.split(",").map(item => item.trim()).filter(Boolean);
   async function save(event: FormEvent) {
@@ -463,58 +433,68 @@ function CareerOnboarding({ onSaved }: { onSaved: () => Promise<void> }) {
     const response = await fetch("/api/career/profile", { method:"PUT", headers:{"Content-Type":"application/json"}, body:JSON.stringify(input) });
     const result = await response.json();
     if (!response.ok) { setMessage(result.error ?? "Career profile could not be saved"); return; }
-    setProfile(result.profile); setMessage("Career context saved. Open roles were rescored against this résumé."); setSetupOpen(false); await onSaved();
-  }
-  async function onResumeFile(file: File | undefined) {
-    if (!file || !profile) return;
-    if (/\.pdf$/i.test(file.name) || file.type === "application/pdf") {
-      setMessage(`Reading ${file.name}…`);
-      const body = new FormData();
-      body.set("file", file);
-      const response = await fetch("/api/career/resume", { method: "POST", body });
-      const result = await response.json() as { profile?: Record<string, unknown>; error?: string };
-      if (!response.ok || !result.profile) { setMessage(result.error ?? "Could not read that PDF. Paste the résumé text instead."); return; }
-      setProfile(result.profile);
-      setMessage(`${file.name} extracted. Save career context to keep filters.`);
-      await onSaved();
-      return;
-    }
-    if (!/text|markdown|tex|plain|html/i.test(file.type || file.name) && !/\.(txt|md|tex|html)$/i.test(file.name)) {
-      setMessage("Upload a PDF, or paste the résumé / a .txt / .md file.");
-      return;
-    }
-    const resumeText = await file.text();
-    setProfile({ ...profile, resumeFilename: file.name, resumeText, onboardingStatus: "in_progress" });
-    setMessage(`${file.name} loaded. Save career context to rescore the board.`);
+    setProfile(result.profile); setMessage("Filters saved. Scoring uses the résumé on You."); setSetupOpen(false); await onSaved();
   }
   if (!profile) return <article className="box onboarding-card"><p>Loading career context…</p></article>;
-  return <SetupPanel title={`Varys · Career preferences · ${statusLabel(String(profile.onboardingStatus))}`} hint={setupOpen ? "Used in Varys’s prompt" : "Edit résumé and filters"} open={setupOpen} onOpenChange={setSetupOpen}>
-    <form className="box onboarding-card" onSubmit={save}><div className="between"><div><h2>Give Varys your career filter</h2><p>This context is injected into the Career Intelligence prompt. It drives fit scores, résumé variants, and LinkedIn search.</p></div><button className="primary">Save</button></div><div className="onboarding-grid"><label>Target roles<input value={list(profile.targetRoles)} onChange={event => setProfile({ ...profile, targetRoles:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Senior Product Manager, Product Lead AI" /></label><label>Locations<input value={list(profile.locations)} onChange={event => setProfile({ ...profile, locations:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Bengaluru, Remote India" /></label><label>Work modes<input value={list(profile.workModes)} onChange={event => setProfile({ ...profile, workModes:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Remote, Hybrid" /></label><label>Seniority<input value={list(profile.seniority)} onChange={event => setProfile({ ...profile, seniority:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Senior, Lead, Principal" /></label><label>Industries<input value={list(profile.industries)} onChange={event => setProfile({ ...profile, industries:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="AI, Fintech, Healthtech" /></label><label>Strengths<input value={list(profile.strengths)} onChange={event => setProfile({ ...profile, strengths:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="0-to-1 products, AI strategy" /></label><label>Exclude<input value={list(profile.exclusions)} onChange={event => setProfile({ ...profile, exclusions:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Pure project management" /></label><label>Compensation notes<input value={String(profile.compensationNotes ?? "")} onChange={event => setProfile({ ...profile, compensationNotes:event.target.value, onboardingStatus:"in_progress" })} /></label><label>Résumé filename<input value={String(profile.resumeFilename ?? "")} onChange={event => setProfile({ ...profile, resumeFilename:event.target.value, onboardingStatus:"in_progress" })} placeholder="manish-resume.tex" /></label><label>Upload résumé<input type="file" accept=".txt,.md,.tex,.html,.pdf,application/pdf,text/plain" onChange={event => void onResumeFile(event.target.files?.[0])} /></label><label className="resume-source">Résumé / LaTeX source<textarea value={String(profile.resumeText ?? "")} onChange={event => setProfile({ ...profile, resumeText:event.target.value, onboardingStatus:"in_progress" })} placeholder="Paste your canonical résumé or LaTeX source here." /></label></div><div className="between onboarding-foot"><small>{message}</small><label className="complete-check"><input type="checkbox" checked={profile.onboardingStatus === "complete"} onChange={event => setProfile({ ...profile, onboardingStatus:event.target.checked ? "complete" : "in_progress" })} /> Mark onboarding complete</label></div></form>
+  return <SetupPanel title="Career filters" hint={setupOpen ? "Optional later edits — résumé lives on You" : "Roles and locations · résumé stays on You"} open={setupOpen} onOpenChange={setSetupOpen}>
+    <form className="box onboarding-card" onSubmit={save}><div className="between"><div><h2>Edit filters later</h2><p>Paste or upload your résumé on You. These filters retarget scoring after that. This is not a second onboarding form.</p></div><button className="primary">Save filters</button></div><div className="onboarding-grid"><label>Target roles<input value={list(profile.targetRoles)} onChange={event => setProfile({ ...profile, targetRoles:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Senior Product Manager, Product Lead AI" /></label><label>Locations<input value={list(profile.locations)} onChange={event => setProfile({ ...profile, locations:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Bengaluru, Remote India" /></label><label>Work modes<input value={list(profile.workModes)} onChange={event => setProfile({ ...profile, workModes:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Remote, Hybrid" /></label><label>Seniority<input value={list(profile.seniority)} onChange={event => setProfile({ ...profile, seniority:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Senior, Lead, Principal" /></label><label>Industries<input value={list(profile.industries)} onChange={event => setProfile({ ...profile, industries:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="AI, Fintech, Healthtech" /></label><label>Strengths<input value={list(profile.strengths)} onChange={event => setProfile({ ...profile, strengths:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="0-to-1 products, AI strategy" /></label><label>Exclude<input value={list(profile.exclusions)} onChange={event => setProfile({ ...profile, exclusions:split(event.target.value), onboardingStatus:"in_progress" })} placeholder="Pure project management" /></label><label>Compensation notes<input value={String(profile.compensationNotes ?? "")} onChange={event => setProfile({ ...profile, compensationNotes:event.target.value, onboardingStatus:"in_progress" })} /></label></div><div className="between onboarding-foot"><small>{message}</small></div></form>
   </SetupPanel>;
 }
 
 function JobIntake({ refresh }: { refresh: () => Promise<void> }) {
-  const [job, setJob] = useState({ title: "", company: "", location: "", url: "" });
+  const emptyJob = { title: "", company: "", location: "", url: "", description: "" };
+  const [job, setJob] = useState(emptyJob);
   const [board, setBoard] = useState({ provider: "greenhouse", name: "" });
+  const [targets, setTargets] = useState<string[]>([]);
+  const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
+  const selectedBoard = COMPANY_BOARD_PROVIDERS.find(item => item.id === board.provider) ?? COMPANY_BOARD_PROVIDERS[0];
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/career/profile", { cache: "no-store" })
+      .then(response => response.json())
+      .then((result: { profile?: { targetRoles?: string[] } }) => {
+        const roles = result.profile?.targetRoles;
+        if (!cancelled) setTargets(Array.isArray(roles) ? roles.map(String).filter(Boolean) : []);
+      })
+      .catch(() => { if (!cancelled) setTargets([]); });
+    return () => { cancelled = true; };
+  }, []);
   async function post(body: Record<string, unknown>, ok: string) {
-    const response = await fetch("/api/career/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    const result = await response.json() as { error?: string; imported?: number; skipped?: number; message?: string };
-    setMessage(response.ok ? ok.replace("{imported}", String(result.imported ?? 1)).replace("{skipped}", String(result.skipped ?? 0)).replace("{message}", result.message ?? ok) : result.error ?? "The job board could not be updated");
-    if (response.ok) await refresh();
+    setBusy(true);
+    try {
+      const response = await fetch("/api/career/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
+      const result = await response.json() as { error?: string; imported?: number; skipped?: number; message?: string; sources?: string[]; cap?: number };
+      const sources = Array.isArray(result.sources) && result.sources.length ? ` Sources: ${result.sources.join(", ")}.` : "";
+      const cap = result.cap ? ` Cap ${result.cap}.` : "";
+      setMessage(response.ok ? ok.replace("{imported}", String(result.imported ?? 1)).replace("{skipped}", String(result.skipped ?? 0)).replace("{message}", result.message ?? ok) + sources + cap : result.error ?? "The job board could not be updated");
+      if (response.ok) await refresh();
+    } catch {
+      setMessage("The job board could not be updated");
+    } finally {
+      setBusy(false);
+    }
   }
-  return <article className="box job-intake"><div><span className="label">COLLECT ROLES</span><h2>Add a role or import a public job board</h2><p>Manual entries and Greenhouse/Lever boards are scored against your résumé. LinkedIn stays a visible handoff.</p></div>
-    <form className="job-add" onSubmit={event => { event.preventDefault(); void post(job, "Role added and scored."); setJob({ title: "", company: "", location: "", url: "" }); }}>
-      <label>Title<input required value={job.title} onChange={event => setJob({ ...job, title: event.target.value })} placeholder="Senior Product Manager, AI" /></label>
-      <label>Company<input required value={job.company} onChange={event => setJob({ ...job, company: event.target.value })} placeholder="Zamp" /></label>
-      <label>Location<input value={job.location} onChange={event => setJob({ ...job, location: event.target.value })} placeholder="Bengaluru" /></label>
-      <label>URL<input value={job.url} onChange={event => setJob({ ...job, url: event.target.value })} placeholder="https://…" /></label>
-      <button className="primary">Add role</button>
+  return <article className="box job-intake"><div><span className="label">COLLECT ROLES</span><h2>Get roles for what you want</h2><p>We pull public job boards. We do not open LinkedIn. A collect imports up to {SEARCH_IMPORT_CAP} roles and replaces labeled sample jobs.</p></div>
+    <section className="job-collect-block">
+      <h3>By what I want</h3>
+      <p>{targets.length ? "Uses the target roles saved on You. India listings join the collect when an India jobs key is set in .dev.vars." : "Add target roles on You first — PM, eng, design, data, or whatever you are actually targeting."}</p>
+      {targets.length > 0 && <div className="job-targets">{targets.slice(0, 6).map(role => <span key={role}>{role}</span>)}</div>}
+      <button className="primary" type="button" disabled={busy || targets.length === 0} onClick={() => void post({ importFrom: { provider: "targets" } }, "Imported {imported} roles for your targets ({skipped} skipped).")}>{busy ? "Collecting…" : "Get roles for my targets"}</button>
+    </section>
+    <form className="job-import" onSubmit={event => { event.preventDefault(); void post({ importFrom: { provider: board.provider, board: board.name } }, "Imported {imported} roles from that board ({skipped} already on the board)."); }}>
+      <label>By company board<select value={board.provider} onChange={event => setBoard({ ...board, provider: event.target.value })}>{COMPANY_BOARD_PROVIDERS.map(item => <option value={item.id} key={item.id}>{item.label}</option>)}</select></label>
+      <label>Company or board token<input required value={board.name} onChange={event => setBoard({ ...board, name: event.target.value })} placeholder={selectedBoard.placeholder} /></label>
+      <button disabled={busy}>Import open roles</button>
     </form>
-    <form className="job-import" onSubmit={event => { event.preventDefault(); void post({ importFrom: { provider: board.provider, board: board.name } }, "Imported {imported} roles ({skipped} already on the board)."); }}>
-      <label>Board source<select value={board.provider} onChange={event => setBoard({ ...board, provider: event.target.value })}><option value="greenhouse">Greenhouse</option><option value="lever">Lever</option></select></label>
-      <label>Company or board token<input required value={board.name} onChange={event => setBoard({ ...board, name: event.target.value })} placeholder="stripe" /></label>
-      <button>Import open roles</button>
+    <form className="job-paste" onSubmit={event => { event.preventDefault(); void post(job, "Saved the posting on this table."); setJob(emptyJob); }}>
+      <p className="job-paste-copy">Paste a posting URL. Paste the job link (and optional description). We save it here. We do not open LinkedIn.</p>
+      <label className="job-url">Job URL<input required value={job.url} onChange={event => setJob({ ...job, url: event.target.value })} placeholder="https://www.linkedin.com/jobs/view/4291847391" /></label>
+      <label>Title (optional)<input value={job.title} onChange={event => setJob({ ...job, title: event.target.value })} placeholder="Senior Product Manager, AI" /></label>
+      <label>Company (optional)<input value={job.company} onChange={event => setJob({ ...job, company: event.target.value })} placeholder="Zamp" /></label>
+      <label>Location (optional)<input value={job.location} onChange={event => setJob({ ...job, location: event.target.value })} placeholder="Bengaluru" /></label>
+      <button className="primary" disabled={busy}>Save posting</button>
+      <label className="job-snippet">Description or snippet (optional)<textarea value={job.description} onChange={event => setJob({ ...job, description: event.target.value })} rows={5} placeholder="Paste the posting text if you copied it. We do not fetch it." /></label>
     </form>
     {message && <small className="config-message">{message}</small>}
   </article>;
@@ -529,65 +509,66 @@ function LinkedInHandoff({ data, mutate }: { data: WorkspaceData; mutate: (actio
       setUrl(`https://www.linkedin.com/jobs/search/?keywords=${encodeURIComponent(keywords)}&f_TPR=r604800`);
     });
   }, [data.jobs.length]);
-  return <article className="box honest-handoff"><span className="label">BROWSER HANDOFF</span><h2>LinkedIn collection is ready, but never hidden</h2><p>Open this search yourself. The Operator will not scrape, apply, or message. Paste interesting roles back into Collect roles.</p><div className="actions"><a className="button-link" href={url} target="_blank" rel="noreferrer">Open LinkedIn search</a><button onClick={() => mutate("request_linkedin")}>Mark handoff requested</button></div></article>;
+  return <article className="box honest-handoff"><span className="label">BROWSER HANDOFF</span><h2>LinkedIn stays a copy-out / paste-in</h2><p>Open this search yourself, copy a /jobs/view/… link, and paste it into Collect roles. We save the URL here. We do not open LinkedIn.</p><div className="actions"><a className="button-link" href={url} target="_blank" rel="noreferrer">Open LinkedIn search</a><button onClick={() => mutate("request_linkedin")}>Mark handoff requested</button></div></article>;
 }
 
-function CareerEmail({ signals, jobs, mutate }: { signals: Record<string, unknown>[]; jobs: Record<string, unknown>[]; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void> }) {
+function CareerEmail({ signals, jobs, mutate, connected }: { signals: Record<string, unknown>[]; jobs: Record<string, unknown>[]; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>; connected?: boolean }) {
   const [showRest, setShowRest] = useState(false);
   const ranked = rankCareerEmails(signals, jobs);
   const next = ranked[0];
   const rest = ranked.slice(1);
   const visible = next ? (showRest ? ranked : [next]) : [];
+  const mailbox = Boolean(connected) || ranked.length > 0;
   return <article className="box email-signals">
-    <div className="between"><div><span className="label">GMAIL · NEXT ACTION{ranked.length > 1 ? ` · ${ranked.length} OPEN` : ""}</span><h2>{next ? String(next.subject) : "No open career email"}</h2><p>Read-only. Ranked by whether you need to act this week — wait/track receipts stay parked. The Operator cannot send, archive, label, or delete email.</p></div><button onClick={() => mutate("request_gmail_sync")}>Request refresh</button></div>
-    <div>{visible.map(signal => <section key={String(signal.id)} className={signal === next ? "email-next" : ""}><div><span className="pill">{statusLabel(String(signal.category))}</span><h3>{String(signal.subject)}</h3><small>{String(signal.sender)} · {new Intl.DateTimeFormat("en-IN", { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit", timeZone:"Asia/Kolkata" }).format(new Date(String(signal.received_at)))}</small><p>{String(signal.summary)}</p><strong>Next: {String(signal.next_action)}</strong>{signal.due_at && <em>Due {formatDate(String(signal.due_at).slice(0,10))}</em>}</div><div className="actions"><a className="button-link" href={String(signal.message_url)} target="_blank" rel="noreferrer">Open Gmail</a><button className="primary" onClick={() => mutate("update_email_signal", { id: signal.id, status: "handled" })}>Mark handled</button><button className="link" onClick={() => mutate("update_email_signal", { id: signal.id, status: "dismissed" })}>Dismiss</button></div></section>)}{ranked.length === 0 && <p className="empty-line">No open career email actions.</p>}{rest.length > 0 && <button type="button" className="link" onClick={() => setShowRest(open => !open)}>{showRest ? "Park remaining threads" : `Show remaining ${rest.length}`}</button>}</div>
+    <div className="between"><div><span className="label">GMAIL · {mailbox ? `NEXT ACTION${ranked.length > 1 ? ` · ${ranked.length} OPEN` : ""}` : "NOT CONNECTED"}</span><h2>{next ? String(next.subject) : mailbox ? "No open career email" : "No mailbox on this machine"}</h2><p>{mailbox ? "Read-only. Ranked by whether you need to act this week — wait/track receipts stay parked. The Operator cannot send, archive, label, or delete email." : "There is no Gmail grant on this laptop. Request refresh cannot open a mailbox. Career email stays empty until a feed exists."}</p></div>{mailbox ? <button onClick={() => mutate("request_gmail_sync")}>Request refresh</button> : null}</div>
+    <div>{visible.map(signal => <section key={String(signal.id)} className={signal === next ? "email-next" : ""}><div><span className="pill">{statusLabel(String(signal.category))}</span><h3>{String(signal.subject)}</h3><small>{String(signal.sender)} · {formatInTimezone(String(signal.received_at), preferredTimezone(undefined), { day:"numeric", month:"short", hour:"2-digit", minute:"2-digit" })}</small><p>{String(signal.summary)}</p><strong>Next: {String(signal.next_action)}</strong>{signal.due_at && <em>Due {formatDate(String(signal.due_at).slice(0,10))}</em>}</div><div className="actions"><a className="button-link" href={String(signal.message_url)} target="_blank" rel="noreferrer">Open Gmail</a><button className="primary" onClick={() => mutate("update_email_signal", { id: signal.id, status: "handled" })}>Mark handled</button><button className="link" onClick={() => mutate("update_email_signal", { id: signal.id, status: "dismissed" })}>Dismiss</button></div></section>)}{ranked.length === 0 && <p className="empty-line">{mailbox ? "No open career email actions." : "Not connected — this is not a mailbox refresh."}</p>}{rest.length > 0 && <button type="button" className="link" onClick={() => setShowRest(open => !open)}>{showRest ? "Park remaining threads" : `Show remaining ${rest.length}`}</button>}</div>
   </article>;
 }
 
 function CareerPage({ data, mutate, refresh }: { data: WorkspaceData; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>; refresh: () => Promise<void> }) {
   const jobs = data.jobs.filter(job => String(job.status) !== "archived" && !isQuotaSalesRole(String(job.title)));
-  const [intakeOpen, setIntakeOpen] = useState(jobs.length === 0);
+  const [intakeOpen, setIntakeOpen] = useState(true);
   const [kanbanOpen, setKanbanOpen] = useState(jobs.length === 0);
+  const [resumeChars, setResumeChars] = useState<number | null>(null);
   const emailSignals = data.emailSignals.filter(item => item.status === "open");
+  const gmail = data.connectors.find(item => item.id === "gmail");
+  const gmailConnected = String(gmail?.status ?? "") === "connected";
   const columns = ["recommended", "saved", "applying", "applied", "interviewing"];
-  const evidence = (job: Record<string, unknown>) => {
-    if (Array.isArray(job.evidence_json)) return job.evidence_json.map(String);
-    if (typeof job.evidence_json === "string") {
-      try {
-        const parsed: unknown = JSON.parse(job.evidence_json);
-        return Array.isArray(parsed) ? parsed.map(String) : [];
-      } catch { return []; }
-    }
-    return [];
-  };
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/career/profile", { cache: "no-store" })
+      .then(response => response.json())
+      .then((result: { profile?: { resumeText?: string } }) => {
+        if (!cancelled) setResumeChars(String(result.profile?.resumeText ?? "").trim().length);
+      })
+      .catch(() => { if (!cancelled) setResumeChars(0); });
+    return () => { cancelled = true; };
+  }, [data.jobs.length]);
+  const hasResume = (resumeChars ?? 0) > MIN_RESUME_CHARS;
   async function scheduleTop() {
     const response = await fetch("/api/career/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scheduleTop: true }) });
     const result = await response.json() as { message?: string; error?: string };
     if (!response.ok) throw new Error(result.error ?? "Could not propose a calendar block");
     await refresh();
   }
-  async function variant(id: string) {
-    const response = await fetch("/api/career/jobs", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ resumeVariant: id }) });
-    if (!response.ok) {
-      const result = await response.json() as { error?: string };
-      throw new Error(result.error ?? "Could not generate a résumé variant");
-    }
-    await refresh();
-  }
   const followUps = jobs.filter(job => job.follow_up_at);
   const topJob = jobs[0];
   const headingAction = topJob
-    ? <div className="heading-actions"><button className="primary" onClick={() => void variant(String(topJob.id))}>Job-specific résumé</button>{topJob.url ? <a className="button-link" href={String(topJob.url)} target="_blank" rel="noreferrer">Open posting</a> : <button className="link" onClick={() => void scheduleTop()}>Propose application block</button>}</div>
+    ? <div className="heading-actions">{topJob.url ? <a className="button-link" href={String(topJob.url)} target="_blank" rel="noreferrer">Open posting</a> : <button className="link" onClick={() => void scheduleTop()}>Propose application block</button>}</div>
     : <button className="primary" onClick={() => void scheduleTop()}>Propose application block</button>;
-  return <><Heading eyebrow="Career" title="Move the highest-fit roles" copy="Start with the ranked shortlist. The board is the same four roles — keep it collapsed until the shortlist is empty." action={headingAction} />
+  return <><Heading eyebrow="Career" title="Move the highest-fit roles" copy={hasResume ? `Start with the ranked shortlist. ${jobs.length} role${jobs.length === 1 ? "" : "s"} on the board.` : "Sample roles stay unlabeled until you paste a résumé on You. Match is gated until then."} action={headingAction} />
     <CareerOnboarding onSaved={refresh} />
-    <div className="job-shortlist">{jobs.slice(0,3).map((job,index) => <article className="box job-card" key={String(job.id)}><div className="priority-number">0{index+1}</div><div><span className="label">{String(job.source)}</span><h2>{String(job.title)}</h2><p>{String(job.company)} · {String(job.location)}</p><small><b>Why:</b> {String(job.fit_reason || job.next_action)}</small>{evidence(job).length > 0 && <ul className="evidence">{evidence(job).slice(0,3).map(item => <li key={item}>{item}</li>)}</ul>}<JobResumeVariant job={job} onGenerated={refresh} /></div><div className="job-fit"><strong>{String(job.fit_score)}%</strong><select value={String(job.status)} onChange={event => mutate("update_job", { id: job.id, status: event.target.value, nextAction: job.next_action })}>{columns.map(status => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></div></article>)}</div>
-    <SetupPanel title="Application board" hint={`${jobs.length} roles in columns — same shortlist, collapsed until it is empty`} open={kanbanOpen} onOpenChange={setKanbanOpen}>
-      <div className="kanban">{columns.map(column => <section className="box" key={column}><span className="label">{statusLabel(column)} · {jobs.filter(job => job.status === column).length}</span>{jobs.filter(job => job.status === column).map(job => <div className="board-card" key={String(job.id)}><strong>{String(job.title)}</strong><small>{String(job.company)}</small></div>)}</section>)}</div>
+    <div className="job-shortlist">{jobs.slice(0,3).map((job,index) => {
+      const sample = isSampleJob(job);
+      const showScore = hasResume && !sample && Number(job.fit_score) > 0;
+      return <article className="box job-card" key={String(job.id)}><div className="priority-number">0{index+1}</div><div><span className="label">{sample ? "Sample" : String(job.source)}</span><h2>{String(job.title)}</h2><p>{String(job.company)} · {String(job.location)}</p><small><b>Why:</b> {sample && !hasResume ? "Sample · not matched to your résumé" : String(job.fit_reason || job.next_action)}</small><JobCareerMatch job={job} onMatched={refresh} /></div><div className="job-fit"><strong>{showScore ? `${String(job.fit_score)}%` : sample ? "Sample" : "—"}</strong><select value={String(job.status)} onChange={event => mutate("update_job", { id: job.id, status: event.target.value, nextAction: job.next_action })}>{columns.map(status => <option key={status} value={status}>{statusLabel(status)}</option>)}</select></div></article>;
+    })}</div>
+    <SetupPanel title="Application board" hint={`${jobs.length} roles in columns`} open={kanbanOpen} onOpenChange={setKanbanOpen}>
+      <div className="kanban">{columns.map(column => <section className="box" key={column}><span className="label">{statusLabel(column)} · {jobs.filter(job => job.status === column).length}</span>{jobs.filter(job => job.status === column).map(job => <div className="board-card" key={String(job.id)}><strong>{String(job.title)}</strong><small>{String(job.company)}{isSampleJob(job) ? " · Sample" : ""}</small></div>)}</section>)}</div>
     </SetupPanel>
-    <CareerEmail signals={emailSignals} jobs={jobs} mutate={mutate} />
+    <CareerEmail signals={emailSignals} jobs={jobs} mutate={mutate} connected={gmailConnected} />
     {followUps.length > 0 && <article className="box email-signals"><span className="label">FOLLOW-UPS · {followUps.length}</span>{followUps.map(job => <section key={String(job.id)}><div><h3>{String(job.title)}</h3><small>{String(job.company)} · due {formatDate(String(job.follow_up_at).slice(0,10))}</small><p>{String(job.next_action)}</p></div></section>)}</article>}
-    <SetupPanel title="Collect roles" hint="Add a posting or import a public board" open={intakeOpen} onOpenChange={setIntakeOpen}>
+    <SetupPanel title="Collect roles" hint="Get roles for my targets, or paste a URL" open={intakeOpen} onOpenChange={setIntakeOpen}>
       <JobIntake refresh={refresh} />
     </SetupPanel>
     <LinkedInHandoff data={data} mutate={mutate} />
@@ -657,152 +638,27 @@ function LearningPage({ data, mutate, refresh }: { data: WorkspaceData; mutate: 
     setTasteTick(value => value + 1);
     await refresh();
   }
+  async function summarizeItem(id: string) {
+    setCollecting("Summarizing…");
+    const response = await fetch("/api/learning/collect", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ summarizeId: id }) });
+    const result = await response.json() as { error?: string; reused?: boolean };
+    setCollecting(response.ok ? (result.reused ? "Reused the stored summary." : "Summary saved.") : result.error ?? "Summary failed");
+    if (response.ok) await refresh();
+  }
   return <><Heading eyebrow="Learning" title="Spend this week’s budget" copy={`${remainingMinutes} of ${weekBudget} minutes remain. This week is a short ranked queue — Useful / Not for me still trains Aemon.`} action={<button className="primary" onClick={() => void collect()}>Collect this week</button>} />
     {collecting && <p className="config-message">{collecting}</p>}
     <LearningConfiguration tasteTick={tasteTick} onBudget={setWeekBudget} />
     <div className="track-tabs"><button className={trackId === "week" ? "active" : ""} onClick={() => setTrackId("week")}><strong>This week</strong><small>{remainingMinutes} min left · {weekItems.length} queued</small></button>{data.tracks.map(item => <button key={String(item.id)} className={track?.id === item.id ? "active" : ""} onClick={() => setTrackId(String(item.id))}><strong>{String(item.name)}</strong><small>{Math.round(Number(item.weekly_budget_minutes)/60*10)/10}h / week</small></button>)}</div>
-    <div className={trackId === "week" ? "resource-queue" : "resource-grid"}>{items.map((item, index) => <article className={`box resource-card ${item.feedback === "skip" ? "skipped" : ""}`} key={String(item.id)}>{trackId === "week" && <div className="priority-number">0{index + 1}</div>}<span className="pill">{String(item.item_type)} · {String(item.duration_minutes)} MIN</span><h2>{String(item.title)}</h2><p className="insight">{String(item.relevance || item.summary)}</p>{item.summary && String(item.summary) !== String(item.relevance) ? <small>{String(item.summary)}</small> : <small>{String(item.source)}</small>}{item.url ? <a className="button-link primary-link" href={String(item.url)} target="_blank" rel="noreferrer">Read article</a> : <p className="empty-line">No outbound link yet — add a source URL in preferences.</p>}<div className="feedback-row"><button type="button" className={item.feedback === "useful" ? "active" : ""} onClick={() => void feedback(String(item.id), "useful")}>Useful</button><button type="button" className={item.feedback === "skip" ? "active" : ""} onClick={() => void feedback(String(item.id), "skip")}>Not for me</button></div><div className="actions"><button className="link" onClick={() => mutate("update_learning", { id: item.id, status: item.status === "saved" ? "recommended" : "saved" })}>{item.status === "saved" ? "Unsave" : "Save for later"}</button><button className="link" onClick={() => mutate("update_learning", { id: item.id, status: "completed" })}>Mark done</button></div><em>{item.feedback ? `${statusLabel(String(item.feedback))} · ${statusLabel(String(item.status))}` : statusLabel(String(item.status))}</em></article>)}</div>
+    <div className={trackId === "week" ? "resource-queue" : "resource-grid"}>{items.map((item, index) => <article className={`box resource-card ${item.feedback === "skip" ? "skipped" : ""}`} key={String(item.id)}>{trackId === "week" && <div className="priority-number">0{index + 1}</div>}<span className="pill">{String(item.item_type)} · {String(item.duration_minutes)} MIN</span><h2>{String(item.title)}</h2><p className="insight">{String(item.relevance || item.summary)}</p>{item.summary && String(item.summary) !== String(item.relevance) ? <small>{String(item.summary)}</small> : <small>{String(item.source)}</small>}{item.url ? <a className="button-link primary-link" href={String(item.url)} target="_blank" rel="noreferrer">Read article</a> : <p className="empty-line">No outbound link yet — add a source URL in preferences.</p>}{(!item.relevance || String(item.relevance) === String(item.source)) && item.url ? <button type="button" className="link" onClick={() => void summarizeItem(String(item.id))}>Summarize</button> : null}<div className="feedback-row"><button type="button" className={item.feedback === "useful" ? "active" : ""} onClick={() => void feedback(String(item.id), "useful")}>Useful</button><button type="button" className={item.feedback === "skip" ? "active" : ""} onClick={() => void feedback(String(item.id), "skip")}>Not for me</button></div><div className="actions"><button className="link" onClick={() => mutate("update_learning", { id: item.id, status: item.status === "saved" ? "recommended" : "saved" })}>{item.status === "saved" ? "Unsave" : "Save for later"}</button><button className="link" onClick={() => mutate("update_learning", { id: item.id, status: "completed" })}>Mark done</button></div><em>{item.feedback ? `${statusLabel(String(item.feedback))} · ${statusLabel(String(item.status))}` : statusLabel(String(item.status))}</em></article>)}</div>
   </>;
 }
 
 function StartupPage({ data, mutate, refresh }: { data: WorkspaceData; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>; refresh: () => Promise<void> }) {
-  const [adding, setAdding] = useState(false); const [title, setTitle] = useState(""); const [problem, setProblem] = useState(""); const [targetUser, setTargetUser] = useState("");
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draft, setDraft] = useState<ThesisFields>(emptyThesisFields());
-  const [messages, setMessages] = useState<Record<string, unknown>[]>([]);
-  const [notes, setNotes] = useState<Record<string, unknown>[]>([]);
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState("");
-  const [showClear, setShowClear] = useState(false);
-  const davosRef = useRef<HTMLTextAreaElement>(null);
-  const idea = data.startupIdeas.find(item => String(item.id) === selectedId) ?? null;
-  const saved = idea ? thesisFieldsFromRow(idea) : emptyThesisFields();
-  const savedClarity = idea ? parseThesisClarity(idea.field_clarity_json) : {};
-  const liveClarity = { ...savedClarity };
-  for (const field of THESIS_FIELDS) {
-    if (draft[field.key] !== saved[field.key]) delete liveClarity[field.key];
-  }
-  const completeness = thesisCompleteness(draft, liveClarity);
-  const gap = nextThesisGap(draft, liveClarity);
-  const nextField = gap ? THESIS_FIELDS.find(field => field.key === gap.key) ?? null : null;
-  const openFields = THESIS_FIELDS.filter(field => completeness.statuses[field.key] !== "clear");
-  const clearFields = THESIS_FIELDS.filter(field => completeness.statuses[field.key] === "clear");
-  function thesisCard(field: (typeof THESIS_FIELDS)[number]) {
-    const status = completeness.statuses[field.key];
-    const noteText = liveClarity[field.key]?.note ?? "";
-    return <label key={field.key} className={`thesis-card status-${status}${field.key === gap?.key ? " thesis-gap" : ""}`}>
-      <span className="thesis-card-head"><span>{field.label}</span><em className={`clarity-chip ${status}`}>{status}</em></span>
-      <small>{field.helper}</small>
-      <textarea value={draft[field.key]} onChange={event => setDraft({ ...draft, [field.key]: event.target.value })} placeholder={field.placeholder} rows={field.key === "idea" || field.key === "problem" ? 3 : 2} />
-      {status === "unclear" && noteText ? <span className="clarity-note">{noteText}</span> : null}
-    </label>;
-  }
-  useEffect(() => {
-    if (!idea) return;
-    setDraft(thesisFieldsFromRow(idea));
-  }, [selectedId, idea?.id, idea?.thesis, idea?.field_clarity_json]);
-  useEffect(() => {
-    if (!idea) return;
-    void fetch(`/api/startup?id=${encodeURIComponent(String(idea.id))}`).then(response => response.json()).then(result => {
-      setMessages(result.messages ?? []);
-      setNotes(result.notes ?? []);
-    });
-  }, [selectedId, idea?.id]);
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    await mutate("add_startup", { title, problem, targetUser, reviewDate: addDays(14) });
-    setTitle(""); setProblem(""); setTargetUser(""); setAdding(false);
-  }
-  async function saveFields(event: FormEvent) {
-    event.preventDefault();
-    if (!idea) return;
-    setBusy("Davos is checking clarity…");
-    const response = await fetch("/api/startup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: idea.id, ...draft, nextValidation: draft.experiment }) });
-    const result = await response.json() as { error?: string };
-    setBusy(response.ok ? "" : result.error ?? "Thesis could not be saved");
-    if (response.ok) await refresh();
-  }
-  async function chat(event: FormEvent) {
-    event.preventDefault();
-    if (!idea || !note.trim()) return;
-    setBusy("Davos is thinking…");
-    const response = await fetch("/api/startup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: idea.id, message: note }) });
-    const result = await response.json() as { messages?: Record<string, unknown>[]; error?: string };
-    setBusy(response.ok ? "" : result.error ?? "Chat failed");
-    setNote("");
-    if (response.ok) {
-      setMessages(result.messages ?? []);
-      await refresh();
-    }
-  }
-  async function research() {
-    if (!idea) return;
-    setBusy("Davos is researching…");
-    const response = await fetch("/api/startup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: idea.id, research: true }) });
-    const result = await response.json() as { error?: string };
-    setBusy(response.ok ? "" : result.error ?? "Research failed");
-    if (response.ok) await refresh();
-  }
-  async function addResearch(text: string, title = "Research note") {
-    if (!idea) return;
-    const response = await fetch("/api/startup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id: idea.id, title, note: text }) });
-    const result = await response.json() as { notes?: Record<string, unknown>[]; error?: string };
-    if (!response.ok) throw new Error(result.error ?? "Note could not be saved");
-    setNotes(result.notes ?? []);
-  }
-  async function onDump(file: File | undefined) {
-    if (!file || !idea) return;
-    if (file.type.startsWith("text") || /\.(txt|md|csv|json)$/i.test(file.name)) {
-      await addResearch(await file.text(), file.name);
-      return;
-    }
-    setBusy("PDF/binary files are not parsed here. Paste the text, or dump a .txt / .md file.");
-  }
-  if (idea) {
-    return <><Heading eyebrow="Startup Lab" title={String(idea.title)} copy={nextField ? `Next: ${nextField.label}${gap?.status === "empty" ? " is empty" : " is unclear"}. Collapse the rest. Save & check is the gate to Thesis clear.` : "Every field is filled and judged clear."} action={<div className="heading-actions">{nextField ? <button className="primary" type="button" onClick={() => davosRef.current?.focus()}>Talk to Davos</button> : null}<button type="button" onClick={() => setSelectedId(null)}>All ideas</button></div>} />
-      <div className="workspace-split">
-        <form className="box idea-brief thesis-canvas" onSubmit={saveFields}>
-          <div className="between">
-            <span className={`pill ${completeness.complete ? "completed" : ""}`}>{completeness.complete ? "Thesis clear" : "Incomplete"}</span>
-            <strong>{completeness.filled} filled · {completeness.clear} clear</strong>
-          </div>
-          <ProgressBar value={(completeness.clear / completeness.total) * 100} />
-          <p className="thesis-hint">{nextField ? `Lead with ${nextField.label}. Clear fields are a strip until you expand them.` : "Matter-of-fact, like a YC application. Complete only when every field is filled and judged clear."}</p>
-          {nextField && <div className="thesis-next"><span className="label">NEXT FIELD</span><h2>{nextField.label}</h2><p>{nextField.helper}</p></div>}
-          {openFields.map(field => thesisCard(field))}
-          {clearFields.length > 0 && <div className="thesis-clear-strip"><button type="button" className="link" onClick={() => setShowClear(open => !open)}>{clearFields.length} clear · {showClear ? "Hide" : "Show"}</button>{showClear ? clearFields.map(field => thesisCard(field)) : <p>{clearFields.map(field => `${field.label}: ${draft[field.key].slice(0, 72)}`).join(" · ")}</p>}</div>}
-          {asList(idea.evidence_json).length > 0 && <><span className="label">WHAT WE LEARNED</span><ul className="evidence">{asList(idea.evidence_json).map(item => <li key={item}>{item}</li>)}</ul></>}
-          {asList(idea.citations_json).length > 0 && <ul className="evidence quiet">{asList(idea.citations_json).map(item => <li key={item}>{item}</li>)}</ul>}
-          <div className="dump-row">
-            <span className="label">DUMP RESEARCH</span>
-            <CaptureComposer placeholder="Paste an interview note, competitor claim, or assumption…" submitLabel="Add to thesis" onSubmit={text => addResearch(text)} />
-            <label className="file-dump">Add a text file<input type="file" accept=".txt,.md,.csv,.json,text/plain" onChange={event => void onDump(event.target.files?.[0])} /></label>
-          </div>
-          {notes.length > 0 && <div className="note-stack">{notes.slice(0, 6).map(item => <section key={String(item.id)}><strong>{String(item.title)}</strong><p>{String(item.body).slice(0, 280)}</p></section>)}</div>}
-          <div className="actions"><button className="primary">Save & check</button><button type="button" onClick={() => void research()}>Rebuild from notes</button></div>
-          {busy && <small className="config-message">{busy}</small>}
-        </form>
-        <section className="box chat-pane">
-          <div className="chat-head"><strong>Davos</strong><small>Builder · one question, then update a field</small></div>
-          <div className="chat-log">{messages.map(item => <div key={String(item.id)} className={String(item.role)}><b>{item.role === "agent" ? "Davos" : "You"}</b><p>{String(item.content)}</p></div>)}{messages.length === 0 && <p className="empty-line">Start with who hurts, and what breaks for them today.</p>}</div>
-          <form className="chat-compose" onSubmit={chat}><textarea ref={davosRef} value={note} onChange={event => setNote(event.target.value)} placeholder="The idea is for people who…" /><button className="primary" disabled={!note.trim() || Boolean(busy)}>Send</button></form>
-          {busy && <small className="config-message">{busy}</small>}
-        </section>
-      </div>
-    </>;
-  }
-  return <><Heading eyebrow="Startup Lab" title="A portfolio of ideas, not one bet" copy="Open an idea and fill the thesis canvas. An idea is not complete until every field is filled and judged clear." action={<button className="primary" onClick={() => setAdding(true)}>+ Add idea</button>} />
-    {adding && <form className="box inline-form" onSubmit={submit}><div className="between"><h2>Capture a new idea</h2><button type="button" className="icon-button" onClick={() => setAdding(false)}>×</button></div><label>Idea title<input required value={title} onChange={event => setTitle(event.target.value)} /></label><label>Problem statement<textarea value={problem} onChange={event => setProblem(event.target.value)} /></label><label>Target user<input value={targetUser} onChange={event => setTargetUser(event.target.value)} /></label><button className="primary">Add to lab</button></form>}
-    <div className="idea-grid">{data.startupIdeas.map(item => {
-      const complete = Number(item.thesis_complete) === 1;
-      const clear = Number(item.thesis_clear_count ?? 0);
-      return <button className="box idea-workspace idea-open" key={String(item.id)} onClick={() => setSelectedId(String(item.id))}><div className="between"><span className={`pill ${complete ? "completed" : ""}`}>{complete ? "Thesis clear" : "Incomplete"}</span><strong>{clear}/10</strong></div><h2>{String(item.title)}</h2><p>{String(item.problem)}</p><small>Open canvas →</small></button>;
-    })}</div>
-  </>;
+  return <StartupLab data={data} mutate={mutate} refresh={refresh} />;
 }
 
-function ContentPage({ data, mutate, refresh }: { data: WorkspaceData; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>; refresh: () => Promise<void> }) {
-  return <ContentWorkspace data={data} mutate={mutate} refresh={refresh} CaptureBar={CaptureComposer} />;
+function ContentPage({ data, mutate, refresh, modelReady }: { data: WorkspaceData; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>; refresh: () => Promise<void>; modelReady: boolean }) {
+  return <ContentWorkspace data={data} mutate={mutate} refresh={refresh} CaptureBar={CaptureComposer} modelReady={modelReady} />;
 }
 
 function MemoryPage({ goals, data, mutate, refresh }: { goals: Goal[]; data: WorkspaceData; mutate: (action: string, payload?: Record<string, unknown>) => Promise<void>; refresh: () => Promise<void> }) {
@@ -1008,7 +864,7 @@ function CouncilPage({ data, mutate }: { data: WorkspaceData; mutate: (action: s
 const navGroups: { label: string; items: { name: View; mark: string; display?: string }[] }[] = [
   { label: "Plan", items: [{ name: "Today", mark: "T" }, { name: "Goals", mark: "G" }] },
   { label: "Programs", items: [{ name: "Career", mark: "C" }, { name: "Learning", mark: "L" }, { name: "Startup Lab", mark: "S" }, { name: "Content", mark: "W" }] },
-  { label: "System", items: [{ name: "Memory", mark: "M" }, { name: "Small Council", mark: "2", display: "Council" }] },
+  { label: "System", items: [{ name: "Setup", mark: "Y", display: "You" }, { name: "Memory", mark: "M" }, { name: "Small Council", mark: "2", display: "Council" }] },
 ];
 
 export default function Home() {
@@ -1016,6 +872,9 @@ export default function Home() {
   const [selectedId, setSelectedId] = useState<string>(); const [creating, setCreating] = useState(false); const [loading, setLoading] = useState(true); const [error, setError] = useState(""); const [toast, setToast] = useState("");
   const [planPayload, setPlanPayload] = useState<PlanPayload | null>(null);
   const [focusMode, setFocusMode] = useState(true);
+  const [sampleData, setSampleData] = useState(false);
+  const [planning, setPlanning] = useState(false);
+  const setupOpened = useRef(false);
 
   useEffect(() => {
     try { setFocusMode(localStorage.getItem(FOCUS_NAV_KEY) !== "off"); } catch { setFocusMode(true); }
@@ -1030,25 +889,44 @@ export default function Home() {
     }
   }
 
+  async function refreshWithModel() {
+    setPlanning(true);
+    try {
+      const payload = await fetch("/api/operator/plan", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ live: true }) }).then(response => response.json()) as PlanPayload;
+      setPlanPayload(payload);
+    } catch {
+      setPlanPayload({ model: { status: "fallback", reason: "The plan could not be loaded." } });
+    } finally {
+      setPlanning(false);
+    }
+  }
+
   async function refresh(preferredId?: string) {
-    try { const [goalResult, workspace] = await Promise.all([apiRequest("GET"), workspaceRequest()]); const nextGoals = goalResult.goals ?? []; setGoals(nextGoals); setData(workspace); setSelectedId(current => preferredId ?? (current && nextGoals.some(goal => goal.id === current) ? current : nextGoals[0]?.id)); setError(""); await loadPlan(); }
+    try {
+      const [goalResult, workspace, setup] = await Promise.all([
+        apiRequest("GET"),
+        workspaceRequest(),
+        fetch("/api/onboarding").then(response => response.json()) as Promise<{ onboarded?: boolean; workspaceKind?: string }>,
+      ]);
+      const nextGoals = goalResult.goals ?? [];
+      setGoals(nextGoals);
+      setData(workspace);
+      setSampleData(setup.workspaceKind !== "personal");
+      setSelectedId(current => preferredId ?? (current && nextGoals.some(goal => goal.id === current) ? current : nextGoals[0]?.id));
+      setError("");
+      if (!setupOpened.current && setup.onboarded === false) {
+        setupOpened.current = true;
+        setView("Setup");
+      }
+    }
     catch (caught) { setError(caught instanceof Error ? caught.message : "The Operator could not be loaded"); } finally { setLoading(false); }
   }
   async function mutate(action: string, payload?: Record<string, unknown>) { try { const result = await workspaceRequest(action, payload); setToast(result.message ?? "Updated"); await refresh(); window.setTimeout(() => setToast(""), 3200); } catch (caught) { setError(caught instanceof Error ? caught.message : "The change could not be saved"); } }
   // eslint-disable-next-line react-hooks/set-state-in-effect
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => { void (async () => { await refresh(); await loadPlan(); })(); }, []);
   const activeCount = useMemo(() => goals.filter(goal => goal.state === "active").length, [goals]);
-  const guide = modelGuideCopy(planPayload?.model);
-  const provider = planPayload?.model?.provider;
-  const used = planPayload?.model?.status === "used";
-  const modelsLive = used || (!guide && data.connectors.some(item => item.id === "llm" && item.status === "connected"));
-  const statusLabelText = used && provider === "deepseek"
-    ? "DeepSeek"
-    : modelsLive
-      ? "Models connected"
-      : /429/.test(planPayload?.model?.reason ?? "")
-        ? "Local rules · rate limited"
-        : "Local rules";
+  const modelCopy = sidebarModelCopy(planPayload?.model, data.connectors);
+  const modelsLive = modelCopy.ready;
 
   function openProgram(next: View, goalId?: string) {
     if (goalId) setSelectedId(goalId);
@@ -1073,20 +951,21 @@ export default function Home() {
   }
 
   function page() {
-    if (view === "Today") return <TodayPage goals={goals} data={data} mutate={mutate} planPayload={planPayload} openProgram={openProgram} />;
+    if (view === "Today") return <TodayPage goals={goals} data={data} mutate={mutate} planPayload={planPayload} openProgram={openProgram} sampleData={sampleData} refreshWithModel={refreshWithModel} planning={planning} />;
     if (view === "Goals") return <GoalsPage goals={goals} selectedId={selectedId} select={setSelectedId} refresh={refresh} addGoal={() => setCreating(true)} />;
+    if (view === "Setup") return <OperatorSetup onSaved={refresh} />;
     if (view === "Career") return <CareerPage data={data} mutate={mutate} refresh={refresh} />;
     if (view === "Learning") return <LearningPage data={data} mutate={mutate} refresh={refresh} />;
     if (view === "Startup Lab") return <StartupPage data={data} mutate={mutate} refresh={refresh} />;
-    if (view === "Content") return <ContentPage data={data} mutate={mutate} refresh={refresh} />;
+    if (view === "Content") return <ContentPage data={data} mutate={mutate} refresh={refresh} modelReady={modelsLive} />;
     if (view === "Memory") return <MemoryPage goals={goals} data={data} mutate={mutate} refresh={refresh} />;
     return <CouncilPage data={data} mutate={mutate} />;
   }
 
-  return <main className="shell"><aside className="app-sidebar"><div className="brand"><b>AO</b><span><strong>AI Operator</strong><small>Personal command center</small></span></div><div className="operator-state"><span><i className={modelsLive ? "live" : "local"} />{statusLabelText}</span><small>{activeCount} active goals{modelsLive ? "" : " · no live models"}</small></div><button type="button" className={`nav-mode ${focusMode ? "active" : ""}`} onClick={toggleFocusMode}>{focusMode ? "Focus · Today first" : "All programs"}</button><nav>{navGroups.map(group => {
+  return <main className="shell"><aside className="app-sidebar"><div className="brand"><b>AO</b><span><strong>AI Operator</strong><small>Personal command center</small></span></div><div className="operator-state"><span><i className={modelsLive ? "live" : "local"} />{modelCopy.title}</span><small>{activeCount} active goals · {modelCopy.detail}</small></div><button type="button" className={`nav-mode ${focusMode ? "active" : ""}`} onClick={toggleFocusMode}>{focusMode ? "Focus · Today first" : "All programs"}</button><nav>{navGroups.map(group => {
     if (group.label !== "Programs" || !focusMode) {
       return <section key={group.label}><span className="nav-label">{group.label}</span>{group.items.map(item => navButton(item))}</section>;
     }
-    return <section key={group.label}>{focusPrograms.primary.length > 0 && <><span className="nav-label">Programs</span>{focusPrograms.primary.map(item => navButton(item))}</>}{focusPrograms.secondary.length > 0 && <><span className={`nav-label${focusPrograms.primary.length ? " nav-quiet-label" : ""}`}>{focusPrograms.primary.length ? "More" : "Programs"}</span>{focusPrograms.secondary.map(item => navButton(item, true))}</>}</section>;
-  })}</nav><div className="sidebar-foot"><span>Next daily run</span><strong>Tomorrow · 10:00</strong><small>Runs when this Mac is available</small></div></aside><section className="workspace">{error && <div className="error-banner">{error}<button className="link" onClick={() => void refresh()}>Try again</button></div>}{toast && <div className="toast">{toast}</div>}{!loading && <ModelGuide model={planPayload?.model} onRetry={() => void loadPlan()} />}{loading ? <div className="loading">Starting your Operator…</div> : page()}</section>{creating && <GoalForm close={() => setCreating(false)} created={async id => { setCreating(false); await refresh(id); }} />}</main>;
+    return <section key={group.label}>{focusPrograms.primary.length > 0 && <><span className="nav-label">Programs</span>{focusPrograms.primary.map(item => navButton(item))}</>}{focusPrograms.secondary.length > 0 && <><span className="nav-label">{focusPrograms.primary.length ? "Also" : "Programs"}</span>{focusPrograms.secondary.map(item => navButton(item))}</>}</section>;
+  })}</nav><div className="sidebar-foot"><span>Local only</span><strong>This machine</strong><small>Plans and drafts stay on this computer. Nothing is hosted.</small></div></aside><section className="workspace">{error && <div className="error-banner">{error}<button className="link" onClick={() => void refresh()}>Try again</button></div>}{toast && <div className="toast">{toast}</div>}{!loading && <ModelGuide model={planPayload?.model} onRetry={() => void refreshWithModel()} />}{loading ? <div className="loading">Starting your Operator…</div> : page()}</section>{creating && <GoalForm close={() => setCreating(false)} existing={goals} demo={sampleData} created={async id => { setCreating(false); await refresh(id); }} imported={async () => { setCreating(false); await refresh(); }} />}</main>;
 }

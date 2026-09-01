@@ -18,6 +18,11 @@ const localBindingConfig = {
     ...(process.env.OPENAI_API_KEY ? { OPENAI_API_KEY: process.env.OPENAI_API_KEY } : {}),
     ...(process.env.DEEPSEEK_API_KEY ? { DEEPSEEK_API_KEY: process.env.DEEPSEEK_API_KEY } : {}),
     ...(process.env.GOOGLE_CALENDAR_ICS_URL ? { GOOGLE_CALENDAR_ICS_URL: process.env.GOOGLE_CALENDAR_ICS_URL } : {}),
+    ...(process.env.ADZUNA_APP_ID ? { ADZUNA_APP_ID: process.env.ADZUNA_APP_ID } : {}),
+    ...(process.env.ADZUNA_APP_KEY ? { ADZUNA_APP_KEY: process.env.ADZUNA_APP_KEY } : {}),
+    ...(process.env.ADZUNA_COUNTRY ? { ADZUNA_COUNTRY: process.env.ADZUNA_COUNTRY } : {}),
+    ...(process.env.THE_MUSE_API_KEY ? { THE_MUSE_API_KEY: process.env.THE_MUSE_API_KEY } : {}),
+    ...(process.env.INDIANAPI_JOBS_KEY ? { INDIANAPI_JOBS_KEY: process.env.INDIANAPI_JOBS_KEY } : {}),
   },
   d1_databases: d1
     ? [

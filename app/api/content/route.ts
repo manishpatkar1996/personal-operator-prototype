@@ -1,4 +1,4 @@
-import { createContentIdea, draftContent, generateContent, generateContentNotes, getContentStrategy, importContentStrategy, outlineContent, saveContentDraft, setContentFormat, shareContentFeedback, updateContentNotes, updateWorkingNotes } from "@/db/content";
+import { createContentIdea, generateContent, generateContentNotes, getContentStrategy, importContentStrategy, outlineContent, saveContentDraft, setContentFormat, shareContentFeedback, updateContentNotes, updateWorkingNotes } from "@/db/content";
 
 export const dynamic = "force-dynamic";
 
@@ -33,9 +33,9 @@ export async function POST(request: Request) {
     if (typeof body.notes === "string") return Response.json(await updateContentNotes(id, body.notes));
     if (typeof body.draft === "string") return Response.json(await saveContentDraft(id, body.draft));
     if (body.generate === "notes") return Response.json(await generateContentNotes(id));
-    if (body.generate === "draft") return Response.json(await draftContent(id));
-    if (body.generate === "content") return Response.json(await generateContent(id));
-    return Response.json(await outlineContent(id));
+    if (body.generate === "outline") return Response.json(await outlineContent(id));
+    if (body.generate === "draft" || body.generate === "content") return Response.json(await generateContent(id));
+    throw new Error("Say whether to generate notes or a draft");
   } catch (error) {
     return errorResponse(error);
   }

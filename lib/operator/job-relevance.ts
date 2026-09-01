@@ -21,6 +21,7 @@ export function isRelevantTrackedJob(job: RelevanceJob, profile: RelevanceProfil
   if (["applying", "applied", "interviewing"].includes(job.status)) return true;
   const wantsSales = profile.targetRoles.some(role => isQuotaSalesRole(role));
   if (!wantsSales && isQuotaSalesRole(job.title)) return false;
-  if (/greenhouse|lever/i.test(job.source) && job.fitScore < 62) return false;
+  if (job.fitScore <= 0) return true;
+  if (/greenhouse|lever|ashby|smartrecruiters/i.test(job.source) && job.fitScore < 62) return false;
   return job.fitScore >= 50;
 }

@@ -32,8 +32,13 @@ test("calendar status is one honest story and hides dismissed ghosts", () => {
   const stale = calendarReadStatus({ icsConfigured: false, connectorStatus: "connected", googleEventCount: 18, todayBlockCount: 6 });
   assert.equal(stale.kind, "stale");
   assert.equal(stale.label, "Reconnect feed");
+  const offline = calendarReadStatus({ icsConfigured: false, connectorStatus: "not_connected", googleEventCount: 0, todayBlockCount: 0 });
+  assert.equal(offline.kind, "offline");
+  assert.equal(offline.label, "Not connected");
   assert.equal(calendarControlsStartOpen(false, true), false);
-  assert.equal(calendarControlsStartOpen(false, false), true);
+  assert.equal(calendarControlsStartOpen(false, false), false);
+  assert.equal(calendarControlsStartOpen(false, false, "offline"), false);
+  assert.equal(calendarControlsStartOpen(false, false, "stale"), true);
   assert.equal(calendarControlsStartOpen(true, false), false);
   const timeline = visibleTimelineBlocks([
     { id: "ghost-1", title: "Convert to interviews", start_at: "2026-09-01T04:30:00+05:30", state: "dismissed", source: "local" },
@@ -42,6 +47,12 @@ test("calendar status is one honest story and hides dismissed ghosts", () => {
     { id: "gym", title: "Gym", start_at: "2026-09-01T06:30:00+05:30", state: "synced", source: "google_calendar" },
   ]);
   assert.deepEqual(timeline.map(item => item.id), ["live-op", "gym"]);
+  const overlapping = visibleTimelineBlocks([
+    { id: "gym", title: "Gym", start_at: "2026-09-01T10:00:00+05:30", end_at: "2026-09-01T11:00:00+05:30", state: "synced", source: "google_calendar" },
+    { id: "staff", title: "Staff meeting", start_at: "2026-09-01T10:00:00+05:30", end_at: "2026-09-01T10:45:00+05:30", state: "synced", source: "google_calendar" },
+    { id: "focus", title: "Convert to interviews", start_at: "2026-09-01T10:00:00+05:30", end_at: "2026-09-01T10:45:00+05:30", state: "scheduled", source: "local" },
+  ]);
+  assert.deepEqual(overlapping.map(item => item.id), ["gym", "staff", "focus"]);
 });
 
 test("Startup Lab next action is the first empty or unclear field", () => {

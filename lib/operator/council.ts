@@ -8,7 +8,7 @@ export type CouncilDraft = {
 };
 
 export function buildCouncilProposals(context: OperatorContext): CouncilDraft[] {
-  const remaining = remainingCapacityMinutes(context.calendar, context.today);
+  const remaining = remainingCapacityMinutes(context.calendar, context.today, context.timezone);
   const job = context.jobs.filter(item => !["applied", "rejected", "archived"].includes(item.status)).sort((a, b) => b.fitScore - a.fitScore)[0];
   const milestone = context.goals
     .filter(goal => goal.state === "active")

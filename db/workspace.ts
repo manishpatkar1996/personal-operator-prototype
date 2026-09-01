@@ -13,6 +13,9 @@ import { ensurePrompts } from "./prompts";
 import { ensureStartupChat } from "./startup-chat";
 import { syncLlmConnector } from "@/lib/operator/llm";
 import { STARTUP_IDEA_SELECT, careerThesisSeed, composeStartupThesis, normalizeThesisFields, operatorThesisSeed, parseThesisClarity, thesisCompleteness, thesisFieldsFromRow } from "@/lib/operator/startup-thesis";
+import { sampleBlocksForToday, preferredTimezone } from "@/lib/operator/calendar";
+import { SAMPLE_JOB_SOURCE } from "@/lib/operator/operator-setup";
+import { allowDemoSeed, getMeta, setMeta } from "./operator-meta";
 
 function db() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
@@ -80,34 +83,60 @@ async function empty(table: string) {
 export async function seedWorkspace() {
   await ensureWorkspaceSchema();
   const database = db();
+  const demo = await allowDemoSeed();
   await database.prepare("INSERT OR IGNORE INTO calendar_preferences (id,policy,timezone,sync_window_days) VALUES ('primary','auto_create','Asia/Kolkata',7)").run();
-  if (await empty("decisions")) await database.batch([
+  const timezone = preferredTimezone((await database.prepare("SELECT timezone FROM calendar_preferences WHERE id='primary'").first<{ timezone: string }>())?.timezone);
+  if (demo && await empty("decisions")) await database.batch([
     database.prepare("INSERT INTO decisions (id,decision,rationale,affected,decided_at) VALUES (?,?,?,?,?)").bind("dec-calendar", "Calendar work should live inside Today", "Scheduling is the execution layer for goals, not a separate destination.", "Today, Goals", "2026-08-31T10:00:00Z"),
     database.prepare("INSERT INTO decisions (id,decision,rationale,affected,decided_at) VALUES (?,?,?,?,?)").bind("dec-linkedin", "LinkedIn discovery is user-triggered and read-only", "The collection session must remain visible, cancellable, and safe.", "Career", "2026-08-31T10:05:00Z"),
   ]);
-  if (await empty("calendar_blocks")) await database.batch([
-    database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind("cal-external", "Product catch-up", null, null, "2026-08-31T12:00:00+05:30", "2026-08-31T12:45:00+05:30", "scheduled", "external_fixed", "sample"),
-    database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind("cal-career", "Review high-fit roles", "goal-career", "ms-pipeline", "2026-08-31T14:00:00+05:30", "2026-08-31T14:45:00+05:30", "scheduled", "operator_created", "sample"),
-    database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind("cal-learning", "Agentic AI deep work", "goal-expertise", "ms-foundations", "2026-08-31T16:00:00+05:30", "2026-08-31T17:00:00+05:30", "scheduled", "operator_created", "sample"),
+  const sampleDay = sampleBlocksForToday(timezone);
+  if (demo && await empty("calendar_blocks")) await database.batch([
+    database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind("cal-external", "Product catch-up", null, null, sampleDay.catchUp.start, sampleDay.catchUp.end, "scheduled", "external_fixed", "sample"),
+    database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind("cal-career", "Review high-fit roles", "goal-career", "ms-pipeline", sampleDay.career.start, sampleDay.career.end, "scheduled", "operator_created", "sample"),
+    database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind("cal-learning", "Agentic AI deep work", "goal-expertise", "ms-foundations", sampleDay.learning.start, sampleDay.learning.end, "scheduled", "operator_created", "sample"),
   ]);
-  if (await empty("jobs")) await database.batch([
-    database.prepare("INSERT INTO jobs (id,title,company,location,fit_score,status,source,next_action) VALUES (?,?,?,?,?,?,?,?)").bind("job-zamp", "Senior Product Manager, AI", "Zamp", "Bengaluru", 92, "recommended", "Manually added", "Review role and tailor resume"),
-    database.prepare("INSERT INTO jobs (id,title,company,location,fit_score,status,source,next_action) VALUES (?,?,?,?,?,?,?,?)").bind("job-agents", "Product Lead, Agents", "AI Infrastructure Co.", "Remote India", 87, "saved", "Job alert email", "Research team and product surface"),
-    database.prepare("INSERT INTO jobs (id,title,company,location,fit_score,status,source,next_action) VALUES (?,?,?,?,?,?,?,?)").bind("job-platform", "Principal PM, AI Platform", "HealthTech", "Chennai / Hybrid", 79, "applied", "Company careers", "Follow up on 4 September"),
+  if (demo) {
+    const calendarRevision = Number((await getMeta("calendar_sample_revision")) || 0);
+    if (calendarRevision < 1) {
+      const existing = await database.prepare("SELECT COUNT(*) AS count FROM calendar_blocks WHERE source='sample'").first<{ count: number }>();
+      if ((existing?.count ?? 0) > 0) {
+        await database.prepare("DELETE FROM calendar_blocks WHERE source='sample' OR id IN ('cal-external','cal-career','cal-learning')").run();
+        await database.batch([
+          database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind("cal-external", "Product catch-up", null, null, sampleDay.catchUp.start, sampleDay.catchUp.end, "scheduled", "external_fixed", "sample"),
+          database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind("cal-career", "Review high-fit roles", "goal-career", "ms-pipeline", sampleDay.career.start, sampleDay.career.end, "scheduled", "operator_created", "sample"),
+          database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)").bind("cal-learning", "Agentic AI deep work", "goal-expertise", "ms-foundations", sampleDay.learning.start, sampleDay.learning.end, "scheduled", "operator_created", "sample"),
+        ]);
+      }
+      await setMeta("calendar_sample_revision", "1");
+    }
+  }
+  if (demo && await empty("jobs")) await database.batch([
+    database.prepare("INSERT INTO jobs (id,title,company,location,fit_score,status,source,next_action,fit_reason) VALUES (?,?,?,?,?,?,?,?,?)").bind("job-zamp", "Senior Product Manager, AI", "Zamp", "Bengaluru", 0, "recommended", SAMPLE_JOB_SOURCE, "Sample role — add a résumé on You before matching", "Sample · not matched"),
+    database.prepare("INSERT INTO jobs (id,title,company,location,fit_score,status,source,next_action,fit_reason) VALUES (?,?,?,?,?,?,?,?,?)").bind("job-agents", "Product Lead, Agents", "AI Infrastructure Co.", "Remote India", 0, "saved", SAMPLE_JOB_SOURCE, "Sample role — not matched to your résumé", "Sample · not matched"),
+    database.prepare("INSERT INTO jobs (id,title,company,location,fit_score,status,source,next_action,fit_reason) VALUES (?,?,?,?,?,?,?,?,?)").bind("job-platform", "Principal PM, AI Platform", "HealthTech", "Chennai / Hybrid", 0, "applied", SAMPLE_JOB_SOURCE, "Sample role — not matched to your résumé", "Sample · not matched"),
   ]);
-  if (await empty("learning_tracks")) await database.batch([
+  if (demo) {
+    const jobsRevision = Number((await getMeta("jobs_sample_revision")) || 0);
+    if (jobsRevision < 1) {
+      await database.prepare("UPDATE jobs SET fit_score=0,source=?,fit_reason='Sample · not matched',next_action='Sample role — add a résumé on You before matching' WHERE id IN ('job-zamp','job-agents','job-platform')")
+        .bind(SAMPLE_JOB_SOURCE).run();
+      await setMeta("jobs_sample_revision", "1");
+    }
+  }
+  if (demo && await empty("learning_tracks")) await database.batch([
     database.prepare("INSERT INTO learning_tracks VALUES (?,?,?,?,?,?)").bind("track-agentic", "Agentic AI", "Build practical depth in memory, planning, tools, and evaluation.", 180, "active", 0),
     database.prepare("INSERT INTO learning_tracks VALUES (?,?,?,?,?,?)").bind("track-news", "AI news & research", "Stay current on material model, product, and research changes.", 60, "active", 1),
     database.prepare("INSERT INTO learning_tracks VALUES (?,?,?,?,?,?)").bind("track-pm", "Product management", "Strengthen strategy, discovery, execution, and leadership craft.", 90, "active", 2),
     database.prepare("INSERT INTO learning_tracks VALUES (?,?,?,?,?,?)").bind("track-interview", "Interview preparation", "Practice role-specific product, behavioural, and AI fluency.", 120, "active", 3),
   ]);
-  if (await empty("learning_items")) await database.batch([
+  if (demo && await empty("learning_items")) await database.batch([
     database.prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance) VALUES (?,?,?,?,?,?,?,?)").bind("learn-memory", "track-agentic", "Memory architectures for long-running agents", "Research paper", "Paper", 28, "recommended", "Directly supports the working Operator milestone."),
     database.prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance) VALUES (?,?,?,?,?,?,?,?)").bind("learn-evals", "track-agentic", "Evaluating tool-using agents in production", "Engineering blog", "Article", 16, "saved", "Addresses a recurring capability gap in target roles."),
     database.prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance) VALUES (?,?,?,?,?,?,?,?)").bind("learn-model", "track-news", "This week in frontier model tooling", "Curated briefing", "Brief", 12, "recommended", "Material changes only; generic announcements removed."),
     database.prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance) VALUES (?,?,?,?,?,?,?,?)").bind("learn-story", "track-interview", "Tell the AI Product Operator story", "Operator exercise", "Exercise", 35, "recommended", "Turns the strongest proof point into a concise interview narrative."),
   ]);
-  if (await empty("startup_ideas")) {
+  if (demo && await empty("startup_ideas")) {
     const operator = operatorThesisSeed();
     const career = normalizeThesisFields(careerThesisSeed());
     const insert = database.prepare("INSERT INTO startup_ideas (id,title,crisp_idea,problem,target_user,scale,market,competition,why_now,unfair_advantage,riskiest_assumption,state,next_validation,confidence,review_date,thesis,experiment) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)");
@@ -116,7 +145,7 @@ export async function seedWorkspace() {
       insert.bind("idea-career", "Career signal engine", career.idea, career.problem, career.targetUser, career.scale, career.market, career.competition, career.whyNow, career.unfairAdvantage, career.riskiestAssumption, "framing", career.experiment, 20, "2026-09-10", composeStartupThesis(career), career.experiment),
     ]);
   }
-  if (await empty("content_ideas")) await database.batch([
+  if (demo && await empty("content_ideas")) await database.batch([
     database.prepare("INSERT INTO content_ideas (id,title,pillar,status,score,source,next_action) VALUES (?,?,?,?,?,?,?)").bind("content-goals", "Why personal AI agents need goals, not task lists", "Agentic products", "recommended", 94, "Operator build notes", "Review the prepared outline"),
     database.prepare("INSERT INTO content_ideas (id,title,pillar,status,score,source,next_action) VALUES (?,?,?,?,?,?,?)").bind("content-operator", "The difference between an assistant and an operator", "AI product thinking", "recommended", 89, "Product thesis", "Add one concrete before/after example"),
     database.prepare("INSERT INTO content_ideas (id,title,pillar,status,score,source,next_action) VALUES (?,?,?,?,?,?,?)").bind("content-approval", "Approval boundaries are a product decision", "Agent trust", "recommended", 84, "Learning stream", "Choose the strongest framework"),
@@ -146,7 +175,7 @@ export async function getWorkspace() {
     rows("SELECT id,policy,timezone,sync_window_days,updated_at,CASE WHEN length(ics_url)>8 THEN 1 ELSE 0 END AS ics_configured FROM calendar_preferences WHERE id='primary'"),
     rows("SELECT id,block_id,action,status,payload_json,external_event_id,error,created_at,updated_at FROM calendar_write_requests ORDER BY created_at DESC LIMIT 50"),
     rows("SELECT id,thread_id,category,subject,sender,received_at,summary,next_action,due_at,status,message_url,last_synced_at FROM email_signals ORDER BY received_at DESC LIMIT 100"),
-    rows("SELECT id,title,company,location,fit_score,status,source,next_action,url,fit_reason,evidence_json,follow_up_at,resume_variant FROM jobs ORDER BY fit_score DESC"),
+    rows("SELECT id,title,company,location,fit_score,status,source,next_action,url,description,fit_reason,evidence_json,follow_up_at,resume_variant FROM jobs ORDER BY fit_score DESC"),
     rows("SELECT id,name,purpose,weekly_budget_minutes,state,position FROM learning_tracks ORDER BY position"),
     rows("SELECT id,track_id,title,source,item_type,duration_minutes,status,relevance,url,summary,feedback FROM learning_items ORDER BY CASE status WHEN 'recommended' THEN 0 WHEN 'saved' THEN 1 ELSE 2 END, rowid DESC"),
     rows(`SELECT ${STARTUP_IDEA_SELECT} FROM startup_ideas ORDER BY review_date`),
@@ -174,8 +203,9 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
     if (!note) throw new Error("Planning note cannot be empty");
     const { parsed, slot } = await applyPlanningNote(note);
     const blockId = crypto.randomUUID();
-    const when = new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" }).format(new Date(slot.startAt));
-    const preference = await database.prepare("SELECT policy FROM calendar_preferences WHERE id='primary'").first<{ policy: string }>();
+    const preference = await database.prepare("SELECT policy,timezone FROM calendar_preferences WHERE id='primary'").first<{ policy: string; timezone: string }>();
+    const timeZone = preferredTimezone(preference?.timezone);
+    const when = new Intl.DateTimeFormat("en-IN", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", timeZone }).format(new Date(slot.startAt));
     const automatic = preference?.policy !== "propose_only";
     const state = "scheduled";
     const result = automatic
@@ -187,7 +217,7 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
     ];
     if (automatic) {
       statements.push(database.prepare("INSERT INTO calendar_write_requests (id,block_id,action,status,payload_json) VALUES (?,?,?,?,?)")
-        .bind(crypto.randomUUID(), blockId, "create", "approved_pending", JSON.stringify({ title: parsed.title, startAt: slot.startAt, endAt: slot.endAt, timezone: "Asia/Kolkata", description: "[AI Operator] Planning note" })));
+        .bind(crypto.randomUUID(), blockId, "create", "approved_pending", JSON.stringify({ title: parsed.title, startAt: slot.startAt, endAt: slot.endAt, timezone: timeZone, description: "[AI Operator] Planning note" })));
     }
     await database.batch(statements);
     return { message: result };
@@ -204,9 +234,8 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
     const startAt = String(data.startAt ?? "");
     const endAt = String(data.endAt ?? "");
     if (!title || !startAt || !endAt || new Date(endAt) <= new Date(startAt)) throw new Error("A title and valid start/end time are required");
-    const conflict = await database.prepare("SELECT title,start_at,end_at FROM calendar_blocks WHERE state NOT IN ('dismissed','write_failed') AND datetime(start_at)<datetime(?) AND datetime(end_at)>datetime(?) ORDER BY start_at LIMIT 1").bind(endAt, startAt).first<{ title: string; start_at: string; end_at: string }>();
-    if (conflict) throw new Error(`That time overlaps with “${conflict.title}”. Choose another slot.`);
-    const preference = await database.prepare("SELECT policy FROM calendar_preferences WHERE id='primary'").first<{ policy: string }>();
+    const preference = await database.prepare("SELECT policy,timezone FROM calendar_preferences WHERE id='primary'").first<{ policy: string; timezone: string }>();
+    const timeZone = preferredTimezone(preference?.timezone);
     const duration = Math.max(15, Math.round((Date.parse(endAt) - Date.parse(startAt)) / 60_000) || 45);
     const slot = await slotForDuration(duration, startAt, endAt);
     const blockId = crypto.randomUUID();
@@ -215,7 +244,7 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
     const statements = [database.prepare("INSERT INTO calendar_blocks (id,title,goal_id,milestone_id,start_at,end_at,state,ownership,source) VALUES (?,?,?,?,?,?,?,?,?)")
       .bind(blockId, title, String(data.goalId ?? "") || null, String(data.milestoneId ?? "") || null, slot.startAt, slot.endAt, state, "operator_created", "local")];
     if (automatic) statements.push(database.prepare("INSERT INTO calendar_write_requests (id,block_id,action,status,payload_json) VALUES (?,?,?,?,?)")
-      .bind(crypto.randomUUID(), blockId, "create", "approved_pending", JSON.stringify({ title, startAt: slot.startAt, endAt: slot.endAt, timezone: "Asia/Kolkata", description: `[AI Operator] Goal focus block · ${blockId}` })));
+      .bind(crypto.randomUUID(), blockId, "create", "approved_pending", JSON.stringify({ title, startAt: slot.startAt, endAt: slot.endAt, timezone: timeZone, description: `[AI Operator] Goal focus block · ${blockId}` })));
     await database.batch(statements);
     const conflictNote = slot.snapped ? " The requested time overlapped an existing block, so the next free gap was used." : "";
     return { message: (automatic ? "Goal block approved automatically and queued for Google Calendar" : "Goal block proposed for your approval") + conflictNote };
@@ -320,8 +349,12 @@ export async function mutateWorkspace(action: string, data: Record<string, unkno
     return { message: status === "handled" ? "Email action marked handled" : status === "dismissed" ? "Email signal dismissed" : "Email signal reopened" };
   }
   if (action === "request_gmail_sync") {
-    await database.prepare("UPDATE connectors SET status='sync_requested',detail='A read-only Gmail refresh has been requested.',updated_at=CURRENT_TIMESTAMP WHERE id='gmail'").run();
-    return { message: "Gmail refresh requested" };
+    const current = await database.prepare("SELECT status FROM connectors WHERE id='gmail'").first<{ status: string }>();
+    if (current?.status === "connected") {
+      return { message: "Gmail is already read-only on this machine. Refresh cannot grant a new mailbox." };
+    }
+    await database.prepare("UPDATE connectors SET status='not_connected',detail='No mailbox on this machine. Request refresh cannot grant Gmail access.',updated_at=CURRENT_TIMESTAMP WHERE id='gmail'").run();
+    return { message: "No mailbox on this machine. This Operator cannot grant Gmail access." };
   }
   if (action === "retry_calendar_write") {
     return retryCalendarWrite(typeof data.requestId === "string" ? data.requestId : undefined, String(data.id ?? data.blockId ?? ""));

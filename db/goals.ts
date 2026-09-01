@@ -67,6 +67,8 @@ export async function ensureGoalSchema() {
 }
 
 async function seedFirstRun() {
+  const { allowDemoSeed } = await import("./operator-meta");
+  if (!(await allowDemoSeed())) return;
   const database = db();
   const count = await database.prepare("SELECT COUNT(*) AS count FROM goals").first<{ count: number }>();
   if ((count?.count ?? 0) > 0) return;
@@ -176,4 +178,68 @@ export async function updateMilestone(input: MilestoneRecord) {
 export async function deleteMilestone(id: string) {
   await ensureGoalSchema();
   await db().prepare("DELETE FROM milestones WHERE id=?").bind(id).run();
+}
+
+export async function deleteAllGoals() {
+  await ensureGoalSchema();
+  const database = db();
+  await database.batch([
+    database.prepare("DELETE FROM milestones"),
+    database.prepare("DELETE FROM goals"),
+  ]);
+}
+
+export async function importGoalsDump(input: unknown, options: { replaceAll?: boolean; replaceDemo?: boolean } = {}) {
+  const { parseGoalsDump } = await import("@/lib/operator/goals-json");
+  const { DEMO_GOAL_IDS } = await import("@/lib/operator/operator-setup");
+  const dump = parseGoalsDump(input);
+  const existing = await listGoals();
+  if (options.replaceAll) await deleteAllGoals();
+  else if (options.replaceDemo) {
+    const database = db();
+    await database.batch([
+      database.prepare(`DELETE FROM milestones WHERE goal_id IN (${DEMO_GOAL_IDS.map(() => "?").join(",")})`).bind(...DEMO_GOAL_IDS),
+      database.prepare(`DELETE FROM goals WHERE id IN (${DEMO_GOAL_IDS.map(() => "?").join(",")})`).bind(...DEMO_GOAL_IDS),
+    ]);
+  }
+  const keepTitles = options.replaceAll
+    ? []
+    : existing.filter(goal => !(options.replaceDemo && (DEMO_GOAL_IDS as readonly string[]).includes(goal.id)));
+  const titles = new Set(keepTitles.map(goal => goal.title.toLowerCase()));
+  const created: string[] = [];
+  const skipped: string[] = [];
+  for (const goal of dump.goals) {
+    if (titles.has(goal.title.toLowerCase())) {
+      skipped.push(goal.title);
+      continue;
+    }
+    const id = await createGoal({
+      title: goal.title,
+      desiredOutcome: goal.desiredOutcome,
+      successCriteria: goal.successCriteria,
+      targetDate: goal.targetDate,
+      priority: goal.priority,
+      state: goal.state,
+      milestones: goal.milestones.map((item, position) => ({
+        title: item.title,
+        completionRule: item.completionRule,
+        targetDate: item.targetDate,
+        weight: item.weight,
+        completionPercentage: item.completionPercentage,
+        status: item.status,
+        position,
+      })),
+    });
+    titles.add(goal.title.toLowerCase());
+    created.push(id);
+  }
+  await neutralizeVoiceOnDemoImport();
+  return { created: created.length, skipped: skipped.length, titles: dump.goals.map(item => item.title) };
+}
+
+async function neutralizeVoiceOnDemoImport() {
+  const { allowDemoSeed } = await import("./operator-meta");
+  if (!(await allowDemoSeed())) return;
+  const { resetContentStrategyToGeneric } = await import("./content");
+  await resetContentStrategyToGeneric();
 }

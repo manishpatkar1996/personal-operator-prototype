@@ -34,6 +34,21 @@ export type ThesisFieldSpec = {
   label: string;
   helper: string;
   placeholder: string;
+  example: string;
+  whyItMatters: string;
+  goodLooksLike: string;
+  weakLooksLike: string;
+};
+
+export const YC_FRAME = {
+  title: "What “clear” means here",
+  lede: "Public YC advice is blunt: make something people want. Davos helps you write that down and say when it is not yet clear. It will not invent a company for you.",
+  points: [
+    "A partner should be able to act on each sentence: who the user is, what hurts this week, what they do today, why you, why this year.",
+    "A wedge is the first beachhead — a specific user and a painful problem — not a platform for everyone.",
+    "Insight is a non-obvious belief, usually earned by being the user. “We’ll execute better” is not an advantage.",
+    "Why now is a change in the world or in the job, not a trend label. Talk to people before you scale.",
+  ],
 };
 
 export const THESIS_FIELDS: ThesisFieldSpec[] = [
@@ -43,6 +58,10 @@ export const THESIS_FIELDS: ThesisFieldSpec[] = [
     label: "The idea",
     helper: "One sentence a stranger could rebuild. No marketing-speak.",
     placeholder: "A ___ that does ___ for ___.",
+    example: "A weekly operator for PMs who already pay for an LLM and a calendar. It proposes the week and never silently moves someone else’s meetings.",
+    whyItMatters: "Start with what you will make. If a stranger cannot rebuild the product from this sentence, the rest of the canvas is fog.",
+    goodLooksLike: "Matter-of-fact. Names the thing, who it is for, and what it does — not a category or a slogan.",
+    weakLooksLike: "An AI-powered platform that revolutionizes how teams work.",
   },
   {
     key: "problem",
@@ -50,6 +69,10 @@ export const THESIS_FIELDS: ThesisFieldSpec[] = [
     label: "Problem",
     helper: "Who hurts, and what breaks for them this week — not a mild inconvenience for millions.",
     placeholder: "When X happens, Y people lose Z.",
+    example: "When Monday planning starts, PMs rebuild the week from Slack, calendar, and notes. They lose the morning, then the plan dies by Wednesday.",
+    whyItMatters: "Want is a painful, frequent problem for a specific person. A small group that urgently wants this beats a large group that might.",
+    goodLooksLike: "A scene from last week: who, what broke, what it cost.",
+    weakLooksLike: "People struggle with productivity and information overload.",
   },
   {
     key: "targetUser",
@@ -57,6 +80,10 @@ export const THESIS_FIELDS: ThesisFieldSpec[] = [
     label: "Target users",
     helper: "Name the first ten people. A small group that urgently wants this beats a large group that might.",
     placeholder: "A specific person you could email this week.",
+    example: "Staff PMs at AI or data-platform companies who already juggle ChatGPT plus Google Calendar and will take a 30-minute call this week.",
+    whyItMatters: "You should be able to find the first ten people. Demographics are not users.",
+    goodLooksLike: "A person you could email: job, context, and why they feel it this week.",
+    weakLooksLike: "Anyone who uses AI tools. SMBs. Enterprises.",
   },
   {
     key: "scale",
@@ -64,6 +91,10 @@ export const THESIS_FIELDS: ThesisFieldSpec[] = [
     label: "Scale",
     helper: "Beachhead now, then the larval path to a much bigger market. Not “everyone with a calendar.”",
     placeholder: "Start with ___. Expand when ___.",
+    example: "Start with a few operators who already mix an LLM and a real calendar. Expand when career, learning, and writing are already in the same week.",
+    whyItMatters: "Huge from day one is usually a lack of focus, not ambition. Name the beachhead, then the next adjacent group.",
+    goodLooksLike: "Who you serve first, and who you serve next only after the first group pulls you there.",
+    weakLooksLike: "Everyone with a to-do list.",
   },
   {
     key: "market",
@@ -71,6 +102,10 @@ export const THESIS_FIELDS: ThesisFieldSpec[] = [
     label: "Market",
     helper: "Bottom-up: who pays, roughly how many, and why that is enough. Not a $50B slide.",
     placeholder: "N people who already pay for ___ × $___ / year.",
+    example: "Knowledge workers who already pay for an LLM plus a calendar. First beachhead: product and AI operators. Expand only after a few of them trust proposed calendar writes.",
+    whyItMatters: "Don’t kill an early idea on TAM theatre — but be honest about who pays. A bottom-up count beats a slide.",
+    goodLooksLike: "Who already pays for a substitute, roughly how many you can reach, and a price they already understand.",
+    weakLooksLike: "The global productivity software market is $50B.",
   },
   {
     key: "competition",
@@ -78,6 +113,10 @@ export const THESIS_FIELDS: ThesisFieldSpec[] = [
     label: "Competition",
     helper: "Name the real substitutes. “No competitors” usually means no research.",
     placeholder: "They use ___ today. We differ because ___.",
+    example: "ChatGPT and Claude (chat, no week). Motion and Reclaim (calendar, no goals). Notion (tasks, no operator). The current stack is that pile plus willpower.",
+    whyItMatters: "People already do something. Name the substitutes and the one reason they would switch.",
+    goodLooksLike: "Named products or workflows they use today, plus the difference that would make them move.",
+    weakLooksLike: "We have no real competitors.",
   },
   {
     key: "whyNow",
@@ -85,6 +124,10 @@ export const THESIS_FIELDS: ThesisFieldSpec[] = [
     label: "Why now",
     helper: "What changed so this is possible or urgent this year — not “AI is hot.”",
     placeholder: "This year, ___ became true, so ___.",
+    example: "Models can already draft a week from notes, and calendar APIs are good enough to propose writes. The constraint to test is trust, not generation quality.",
+    whyItMatters: "Why this year, not five years ago. A change in tools, in the job, or in what just became possible.",
+    goodLooksLike: "A specific change that made this newly possible or newly painful.",
+    weakLooksLike: "AI is exploding so the timing is perfect.",
   },
   {
     key: "unfairAdvantage",
@@ -92,6 +135,10 @@ export const THESIS_FIELDS: ThesisFieldSpec[] = [
     label: "Unfair advantage",
     helper: "What you know that others don’t. “We’ll execute better” is not an insight.",
     placeholder: "Most people think ___. We’ve learned ___.",
+    example: "The founder is the user: a PM of data/AI products running the operator on their own calendar. Approval boundaries are a product decision learned from use, not a slogan.",
+    whyItMatters: "Insight, not hustle. What you know that a well-funded team does not.",
+    goodLooksLike: "A non-obvious belief you earned — from being the user, from a domain, or from a constraint others treat as a bug.",
+    weakLooksLike: "We’ll just work harder and move faster.",
   },
   {
     key: "riskiestAssumption",
@@ -99,6 +146,10 @@ export const THESIS_FIELDS: ThesisFieldSpec[] = [
     label: "Riskiest assumption",
     helper: "The belief that, if false, kills the idea. Make it falsifiable.",
     placeholder: "We are betting that ___ will ___.",
+    example: "People will trust an operator with calendar writes only if those writes stay proposed until they approve — and that constraint is still useful enough to keep using.",
+    whyItMatters: "Hold the problem; test the hypothesis. If you cannot falsify the bet, you cannot learn.",
+    goodLooksLike: "One sentence you could prove wrong in two weeks.",
+    weakLooksLike: "We assume customers will love it.",
   },
   {
     key: "experiment",
@@ -106,6 +157,10 @@ export const THESIS_FIELDS: ThesisFieldSpec[] = [
     label: "Next experiment",
     helper: "The smallest honest test in ~14 days. Talk to users; don’t scale yet.",
     placeholder: "This week I will ___ with ___ people to learn ___.",
+    example: "This week I will talk to five PMs who already pay for ChatGPT and a calendar, and ask whether they would let a tool propose (not send) calendar changes.",
+    whyItMatters: "Building the whole product is not a test. A count of people, a question, and what you will believe if the answer is no.",
+    goodLooksLike: "Who you will talk to, what you will ask, and what would change the idea.",
+    weakLooksLike: "Build an MVP and see if it grows.",
   },
 ];
 
@@ -247,6 +302,11 @@ export function applyThesisValidation(fields: ThesisFields, payload: unknown): T
 }
 
 const VAGUE = /^(needs framing\.?|tbd|todo|n\/?a|none|everyone|all users)$/i;
+const DEMOGRAPHIC = /\b(everyone|anybody|anyone|all users|consumers|enterprises|smbs?|millennials|knowledge workers in general)\b/i;
+const EXECUTE_BETTER = /\b(execute better|work harder|move faster|we('ll| will) just|passion(?:ate)? team|hustle)\b/i;
+const AI_IS_HOT = /\b(ai is (?:hot|exploding|booming)|everyone is using ai|ai boom|ai revolution)\b/i;
+const LOVE_IT = /\b(customers? will love it|people will want this|they will come)\b/i;
+const BUILD_MVP = /\b(build (?:an |the )?mvp|build the (?:whole )?product|see if it grows|launch and see)\b/i;
 
 export function heuristicFieldJudgement(key: ThesisFieldKey, value: string): FieldValidation {
   const text = value.trim();
@@ -257,13 +317,37 @@ export function heuristicFieldJudgement(key: ThesisFieldKey, value: string): Fie
   if (MARKETING_SPEAK.test(text)) {
     return { status: "unclear", note: "Sounds like marketing-speak. Say what you will make, in plain words." };
   }
+  if (key === "idea" && /\b(platform for everyone|ai productivity|the uber for)\b/i.test(text)) {
+    return { status: "unclear", note: "Name the thing and who it is for. A category is not an idea." };
+  }
+  if (key === "problem" && /\b(productivity|information overload|inefficien(?:t|cy))\b/i.test(text) && text.length < 80) {
+    return { status: "unclear", note: "Describe a scene from last week — who, what broke, what it cost." };
+  }
+  if (key === "targetUser" && (DEMOGRAPHIC.test(text) || /^(smes?|smbs?|enterprises|businesses)\.?$/i.test(text))) {
+    return { status: "unclear", note: "Name a person you could email this week, not a demographic." };
+  }
+  if (key === "scale" && /\b(everyone with a (calendar|to-do)|all professionals)\b/i.test(text)) {
+    return { status: "unclear", note: "Name the beachhead first. Everyone is not a starting market." };
+  }
   if (key === "competition" && /no competitors|no competition|we have no (real )?competitors/i.test(text)) {
     return { status: "unclear", note: "Name the substitutes people use today." };
   }
   if (key === "market" && /\$\s*\d+\s*(b|bn|billion|t|trillion)\b/i.test(text) && !/\b\d{2,}\b/.test(text)) {
     return { status: "unclear", note: "A huge TAM is not a market. Count who would actually pay." };
   }
-  return { status: "unclear", note: "Filled, but not validated clear yet." };
+  if (key === "whyNow" && AI_IS_HOT.test(text)) {
+    return { status: "unclear", note: "Why this year, not “AI is hot.” Name what changed." };
+  }
+  if (key === "unfairAdvantage" && EXECUTE_BETTER.test(text)) {
+    return { status: "unclear", note: "Hustle is not an insight. What do you know that others don’t?" };
+  }
+  if (key === "riskiestAssumption" && LOVE_IT.test(text)) {
+    return { status: "unclear", note: "Make it falsifiable. What, if false, kills the idea?" };
+  }
+  if (key === "experiment" && (BUILD_MVP.test(text) || (!/\b\d+\b/.test(text) && !/\b(talk|interview|call|ask)\b/i.test(text)))) {
+    return { status: "unclear", note: "A test names people, a question, and what a “no” would change — not “build the MVP.”" };
+  }
+  return { status: "unclear", note: "Filled, but not judged clear yet. Save & check is the gate." };
 }
 
 export function heuristicThesisClarity(fields: ThesisFields): ThesisClarity {
@@ -333,4 +417,6 @@ export const STARTUP_IDEA_SELECT = [
   "citations_json",
   "thesis",
   "field_clarity_json",
+  "world_test_json",
+  "challenge_json",
 ].join(",");

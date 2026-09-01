@@ -68,6 +68,30 @@ export async function ensurePrompts() {
     }
     await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('prompt_revision','6')").run();
   }
+  if (Number((await database.prepare("SELECT value FROM operator_meta WHERE key='prompt_revision'").first<{ value: string }>())?.value ?? 0) < 7) {
+    const prompt = DEFAULT_PROMPTS.find(item => item.id === "job_explain");
+    if (prompt) {
+      await database.prepare("UPDATE operator_prompts SET role_id=?,title=?,use_when=?,system_prompt=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(prompt.roleId, prompt.title, prompt.useWhen, prompt.systemPrompt, prompt.id).run();
+    }
+    await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('prompt_revision','7')").run();
+  }
+  if (Number((await database.prepare("SELECT value FROM operator_meta WHERE key='prompt_revision'").first<{ value: string }>())?.value ?? 0) < 8) {
+    for (const prompt of DEFAULT_PROMPTS.filter(item => item.roleId === "samwell")) {
+      await database.prepare("UPDATE operator_prompts SET role_id=?,title=?,use_when=?,system_prompt=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(prompt.roleId, prompt.title, prompt.useWhen, prompt.systemPrompt, prompt.id).run();
+    }
+    await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('prompt_revision','8')").run();
+  }
+  if (Number((await database.prepare("SELECT value FROM operator_meta WHERE key='prompt_revision'").first<{ value: string }>())?.value ?? 0) < 9) {
+    for (const prompt of DEFAULT_PROMPTS.filter(item => item.roleId === "davos")) {
+      await database.prepare("INSERT OR IGNORE INTO operator_prompts (id,role_id,title,use_when,system_prompt) VALUES (?,?,?,?,?)")
+        .bind(prompt.id, prompt.roleId, prompt.title, prompt.useWhen, prompt.systemPrompt).run();
+      await database.prepare("UPDATE operator_prompts SET role_id=?,title=?,use_when=?,system_prompt=?,updated_at=CURRENT_TIMESTAMP WHERE id=?")
+        .bind(prompt.roleId, prompt.title, prompt.useWhen, prompt.systemPrompt, prompt.id).run();
+    }
+    await database.prepare("INSERT OR REPLACE INTO operator_meta (key,value) VALUES ('prompt_revision','9')").run();
+  }
 }
 
 export async function getPrompt(id: string) {

@@ -1,4 +1,4 @@
-import { createGoal, createMilestone, deleteMilestone, listGoals, updateGoal, updateMilestone } from "@/db/goals";
+import { createGoal, createMilestone, deleteMilestone, importGoalsDump, listGoals, updateGoal, updateMilestone } from "@/db/goals";
 
 export const dynamic = "force-dynamic";
 
@@ -15,6 +15,11 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json() as Record<string, unknown>;
+    if (body.kind === "import") {
+      const replaceAll = body.replaceAll === true;
+      const result = await importGoalsDump(body.data ?? body.goals ?? body, { replaceAll, replaceDemo: !replaceAll });
+      return Response.json(result, { status: 201 });
+    }
     if (body.kind === "milestone") return Response.json({ id: await createMilestone(body.data as Parameters<typeof createMilestone>[0]) }, { status: 201 });
     return Response.json({ id: await createGoal(body.data as Parameters<typeof createGoal>[0]) }, { status: 201 });
   } catch (error) { return errorResponse(error); }

@@ -1,5 +1,5 @@
 import { createJob, importJobs, listJobs, rescoreJobs, scheduleTopJob } from "@/db/jobs";
-import { generateResumeVariant, setJobFollowUp } from "@/db/career-actions";
+import { explainJobMatch, setJobFollowUp } from "@/db/career-actions";
 
 export const dynamic = "force-dynamic";
 
@@ -24,8 +24,8 @@ export async function POST(request: Request) {
     if (body.scheduleTop === true) {
       return Response.json(await scheduleTopJob());
     }
-    if (body.resumeVariant && typeof body.resumeVariant === "string") {
-      return Response.json(await generateResumeVariant(body.resumeVariant, { regenerate: body.regenerate === true }));
+    if (body.explainJob && typeof body.explainJob === "string") {
+      return Response.json(await explainJobMatch(body.explainJob, { regenerate: body.regenerate === true }));
     }
     const followUp = body.followUp && typeof body.followUp === "object" ? body.followUp as Record<string, unknown> : null;
     if (followUp) {
@@ -33,15 +33,17 @@ export async function POST(request: Request) {
     }
     const importFrom = body.importFrom && typeof body.importFrom === "object" ? body.importFrom as Record<string, unknown> : null;
     if (importFrom) {
-      return Response.json(await importJobs(String(importFrom.provider ?? "greenhouse"), String(importFrom.board ?? "")));
+      const provider = String(importFrom.provider ?? importFrom.mode ?? "greenhouse");
+      return Response.json(await importJobs(provider, String(importFrom.board ?? "")));
     }
     return Response.json({
       id: await createJob({
         title: String(body.title ?? ""),
         company: String(body.company ?? ""),
         location: String(body.location ?? ""),
-        source: String(body.source ?? "Manually added"),
+        source: String(body.source ?? ""),
         url: String(body.url ?? ""),
+        description: typeof body.description === "string" ? body.description : undefined,
         nextAction: typeof body.nextAction === "string" ? body.nextAction : undefined,
       }),
     }, { status: 201 });

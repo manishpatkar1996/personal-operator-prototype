@@ -1,8 +1,9 @@
 import { env } from "cloudflare:workers";
 import { DEFAULT_PROMPTS } from "./agents.ts";
-import { formatStrategyForPrompt, parseLinkedInCraft, parseMediumCraft, parseTasteLog, parseVoice } from "./content-craft.ts";
+import { formatStrategyForPrompt, parseContentFormat, parseLinkedInCraft, parseMediumCraft, parseTasteLog, parseVoice, type ContentFormat } from "./content-craft.ts";
 import { deepseekModelFor, liveProviderOrder, modelFor, type OperatorTask } from "./models.ts";
 import { composeLiveSystemPrompt } from "./system-prompt.ts";
+import { isLiveTaskDisabled, userHasPreferencePayload } from "./token-policy.ts";
 
 const MAX_CHARS = 24_000;
 
@@ -62,8 +63,19 @@ function readJsonList(value: string | null | undefined) {
   }
 }
 
-async function preferenceContext(task: OperatorTask) {
+function contentFormatFromUser(user: string): ContentFormat | undefined {
+  try {
+    const parsed = JSON.parse(user) as { idea?: { format?: string }; format?: string };
+    const value = parsed.idea?.format ?? parsed.format;
+    return value ? parseContentFormat(value) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function preferenceContext(task: OperatorTask, user: string) {
   if (!env.DB) return "";
+  if (userHasPreferencePayload(task, user)) return "";
   try {
     if (task === "resume_extract" || task === "job_explain") {
       const row = await env.DB.prepare("SELECT target_roles_json,locations_json,work_modes_json,strengths_json,exclusions_json FROM career_profiles WHERE id='local'").first<Record<string, string>>();
@@ -103,6 +115,7 @@ async function preferenceContext(task: OperatorTask) {
         linkedinCraft: parseLinkedInCraft(parse(row.linkedin_craft_json)),
         mediumCraft: parseMediumCraft(parse(row.medium_craft_json)),
         taste: parseTasteLog(parse(row.taste_json)),
+        format: contentFormatFromUser(user),
       })}`;
     }
   } catch {
@@ -141,14 +154,16 @@ async function chatJson(options: {
 
 export async function completeJson(task: OperatorTask, system: string, user: string) {
   lastProvider = "";
+  if (isLiveTaskDisabled(task)) throw new Error(`${task} is not enabled`);
   const stored = await storedPrompt(task);
   const catalog = DEFAULT_PROMPTS.find(item => item.id === task)?.systemPrompt || "";
   const systemPrompt = composeLiveSystemPrompt(stored || catalog, system);
   if (!systemPrompt.trim()) throw new Error("No system prompt is configured for this task");
-  const extra = await preferenceContext(task);
+  const extra = await preferenceContext(task, user);
   const temperature = task === "council" || task === "content_draft" ? 0.4 : 0.2;
+  const jsonOnly = /return json/i.test(`${systemPrompt}${extra}`) ? "" : "\nReturn JSON only.";
   const messages = [
-    { role: "system" as const, content: `${systemPrompt}${extra}\nReturn JSON only.` },
+    { role: "system" as const, content: `${systemPrompt}${extra}${jsonOnly}` },
     { role: "user" as const, content: user.slice(0, MAX_CHARS) },
   ];
   const vars = envRecord();

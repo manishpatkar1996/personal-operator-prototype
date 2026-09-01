@@ -54,10 +54,10 @@ export async function chatContentIdea(ideaId: string, message: string, liveDraft
         "Advise on the current draft. Return JSON {reply:string, revisedDraft?:string}. Only include revisedDraft if the user asked you to rewrite. Never publish.",
         JSON.stringify({
           idea: { title: idea.title, format, workingNotes: idea.working_notes, feedback: idea.feedback_text, outline: idea.outline_json },
-          draft: currentDraft,
-          generated: idea.generated_draft,
+          draft: currentDraft.slice(0, format === "linkedin_post" ? 3_000 : 6_000),
+          generated: idea.generated_draft.slice(0, format === "linkedin_post" ? 3_000 : 6_000),
           strategy: strategy ? { thesis: strategy.thesis, sourceName: strategy.source_name } : null,
-          history: history.slice(-8).map(item => ({ role: item.role, content: String(item.content).slice(0, 800) })),
+          history: history.slice(-4).map(item => ({ role: item.role, content: String(item.content).slice(0, 800) })),
           message: text,
         }),
       ) as { reply?: string; revisedDraft?: string };

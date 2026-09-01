@@ -95,6 +95,7 @@ export const jobs = sqliteTable("jobs", {
   source: text("source").notNull(),
   nextAction: text("next_action").notNull(),
   url: text("url").notNull().default(""),
+  description: text("description").notNull().default(""),
   fitReason: text("fit_reason").notNull().default(""),
   evidenceJson: text("evidence_json").notNull().default("[]"),
   followUpAt: text("follow_up_at"),
@@ -144,6 +145,8 @@ export const startupIdeas = sqliteTable("startup_ideas", {
   citationsJson: text("citations_json").notNull().default("[]"),
   thesis: text("thesis").notNull().default(""),
   fieldClarityJson: text("field_clarity_json").notNull().default("{}"),
+  worldTestJson: text("world_test_json").notNull().default("{}"),
+  challengeJson: text("challenge_json").notNull().default("{}"),
 });
 
 export const contentIdeas = sqliteTable("content_ideas", {

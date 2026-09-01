@@ -18,6 +18,7 @@ export type OperatorTask =
   | "startup_research"
   | "startup_chat"
   | "startup_validate"
+  | "startup_challenge"
   | "council";
 
 export type ModelRoute = {
@@ -32,7 +33,7 @@ export const MODEL_ROUTES: Record<OperatorTask, ModelRoute> = {
   daily_plan: {
     task: "daily_plan",
     model: MODEL_TIERS.nano,
-    useWhen: "Turn workspace context into a 3-item structured plan. Runs whenever Today loads.",
+    useWhen: "Explicit Refresh with model on Today. Cached or deterministic otherwise.",
     skipLlmWhen: "No API key, or the deterministic planner already produced a valid plan.",
     estimatedUsdPerRun: "~$0.001",
   },
@@ -46,7 +47,7 @@ export const MODEL_ROUTES: Record<OperatorTask, ModelRoute> = {
   resume_extract: {
     task: "resume_extract",
     model: MODEL_TIERS.mini,
-    useWhen: "Write a complete job-specific LaTeX résumé from the stored résumé. User-triggered.",
+    useWhen: "User-triggered ATS match colour after deterministic scoring.",
     skipLlmWhen: "The user typed preferences by hand.",
     estimatedUsdPerRun: "~$0.01",
   },
@@ -109,15 +110,22 @@ export const MODEL_ROUTES: Record<OperatorTask, ModelRoute> = {
   startup_chat: {
     task: "startup_chat",
     model: MODEL_TIERS.mini,
-    useWhen: "User opens an idea and talks it into a concrete problem, user, and experiment.",
-    skipLlmWhen: "The idea is only being captured as a title.",
+    useWhen: "Unused in the UI. Chat is not a Startup Lab surface.",
+    skipLlmWhen: "Always. The canvas and on-demand challenge replaced chat.",
     estimatedUsdPerRun: "~$0.01",
   },
   startup_validate: {
     task: "startup_validate",
     model: MODEL_TIERS.mini,
-    useWhen: "Judge each thesis field clear vs unclear after a save, chat update, or research rebuild.",
-    skipLlmWhen: "No live model. Fields stay unclear until Davos can judge them.",
+    useWhen: "User clicks Save & check. One call. Not on type.",
+    skipLlmWhen: "No live model. Fields stay unclear until a check can judge them.",
+    estimatedUsdPerRun: "~$0.01",
+  },
+  startup_challenge: {
+    task: "startup_challenge",
+    model: MODEL_TIERS.mini,
+    useWhen: "User clicks Challenge this. One call. Steelman, objections, next research.",
+    skipLlmWhen: "No live model, or the user has not clicked. Deterministic challenge is enough until then.",
     estimatedUsdPerRun: "~$0.01",
   },
   council: {

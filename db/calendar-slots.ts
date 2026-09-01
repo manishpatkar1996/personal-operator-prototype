@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { conflictsWith, nextFreeSlot, parsePlanningNote, remainingCapacityMinutes, type TimeBlock } from "@/lib/operator/calendar";
+import { calendarDayStamp, conflictsWith, formatConflictCallout, formatConflictRange, isOccupying, nextFreeSlot, occupiesCalendarDay, overlapClusters, parsePlanningNote, planningBusyBlocks, preferredTimezone, remainingCapacityMinutes, type TimeBlock } from "@/lib/operator/calendar";
 
 function db() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
@@ -27,30 +27,44 @@ export async function listTimeBlocks(): Promise<TimeBlock[]> {
   }));
 }
 
+async function preferredCalendarTimezone() {
+  const row = await db().prepare("SELECT timezone FROM calendar_preferences WHERE id='primary'").first<{ timezone: string }>();
+  return preferredTimezone(row?.timezone);
+}
+
 export async function calendarIntelligence(date?: string) {
   const blocks = await listTimeBlocks();
-  const today = date ?? new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
-  const slot = nextFreeSlot(blocks, 45);
+  const timezone = await preferredCalendarTimezone();
+  const today = date ?? calendarDayStamp(timezone);
+  const slot = nextFreeSlot(blocks, 45, new Date(), timezone);
+  const clusters = overlapClusters(blocks, today, timezone);
   return {
-    timezone: "Asia/Kolkata",
+    timezone,
     date: today,
-    remainingMinutes: remainingCapacityMinutes(blocks, today),
+    remainingMinutes: remainingCapacityMinutes(blocks, today, timezone),
     nextSlot: slot,
-    busy: blocks.filter(block => block.startAt.slice(0, 10) === today && block.state !== "dismissed"),
+    busy: blocks.filter(block => isOccupying(block) && occupiesCalendarDay(block, today, timezone)),
+    conflicts: clusters.map(cluster => ({
+      ...cluster,
+      headline: formatConflictCallout(cluster, timezone),
+      range: formatConflictRange(cluster, timezone),
+    })),
   };
 }
 
 export async function slotForDuration(durationMinutes = 45, preferredStart?: string, preferredEnd?: string) {
   const blocks = await listTimeBlocks();
-  if (preferredStart && preferredEnd && conflictsWith(blocks, preferredStart, preferredEnd).length === 0) {
+  const timezone = await preferredCalendarTimezone();
+  const occupied = planningBusyBlocks(blocks, timezone);
+  if (preferredStart && preferredEnd && conflictsWith(occupied, preferredStart, preferredEnd).length === 0) {
     return { startAt: preferredStart, endAt: preferredEnd, snapped: false, conflicts: [] as TimeBlock[] };
   }
-  const slot = nextFreeSlot(blocks, durationMinutes, preferredStart ? new Date(preferredStart) : new Date());
+  const slot = nextFreeSlot(blocks, durationMinutes, preferredStart ? new Date(preferredStart) : new Date(), timezone);
   return {
     startAt: slot.startAt,
     endAt: slot.endAt,
     snapped: true,
-    conflicts: preferredStart && preferredEnd ? conflictsWith(blocks, preferredStart, preferredEnd) : [],
+    conflicts: preferredStart && preferredEnd ? conflictsWith(occupied, preferredStart, preferredEnd) : [],
   };
 }
 
@@ -67,7 +81,8 @@ export async function retryCalendarWrite(requestId?: string, blockId?: string) {
 }
 
 export async function applyPlanningNote(note: string) {
-  const parsed = parsePlanningNote(note);
+  const timezone = await preferredCalendarTimezone();
+  const parsed = parsePlanningNote(note, new Date(), timezone);
   const slot = await slotForDuration(parsed.durationMinutes);
   return { parsed, slot };
 }

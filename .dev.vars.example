@@ -1,8 +1,23 @@
-OPENAI_API_KEY=
+# Copy to .dev.vars (gitignored). `npm run setup` does this if .dev.vars is missing.
+# DeepSeek is the live model. OpenAI is paused in code (OPENAI_LIVE = false).
+
 DEEPSEEK_API_KEY=
-# Optional. Secret iCal URL from Google Calendar → Settings → Integrate calendar.
+OPENAI_API_KEY=
+
+# Optional. Google Calendar → Settings → Integrate calendar → secret iCal URL.
+# Or paste the same URL in Calendar controls in the app.
 # GOOGLE_CALENDAR_ICS_URL=
-# Optional per-task overrides. Defaults live in lib/operator/models.ts
-# OPERATOR_MODEL_DAILY_PLAN=gpt-4.1-nano
-# OPERATOR_MODEL_COUNCIL=gpt-4.1
-# OPERATOR_MODEL_DEEPSEEK=deepseek-chat
+
+# Optional job search. Collect-by-targets still works without these
+# (Remotive, Jobicy, Arbeitnow, The Muse are keyless).
+# Adzuna: https://developer.adzuna.com — register for an app id/key.
+# ADZUNA_APP_ID=
+# ADZUNA_APP_KEY=
+# Country override when locations on You are ambiguous (us, gb, in, de, au, ca).
+# ADZUNA_COUNTRY=us
+# Optional. The Muse is keyless; a key only raises the hourly cap.
+# THE_MUSE_API_KEY=
+# India job listings (optional). Sign in at https://indianapi.in/jobs-api for a free key.
+# Collect-by-targets calls GET https://jobs.indianapi.in/jobs with title + India location.
+# We store the apply link. We do not fetch job pages.
+# INDIANAPI_JOBS_KEY=

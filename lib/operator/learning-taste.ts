@@ -74,9 +74,9 @@ export function preferencesFromResume(profile: {
   const resume = `${profile.resumeText ?? ""} ${(profile.strengths ?? []).join(" ")} ${(profile.targetRoles ?? []).join(" ")}`.toLowerCase();
   const tracks = unique([
     has(resume, /agent|tool.?use|llm|copilot/) ? "Agentic AI products" : "",
-    has(resume, /data platform|warehouse|analytics|athena|google cloud|gcp/) ? "Enterprise data & AI platforms" : "",
+    has(resume, /data platform|warehouse|analytics/) ? "Enterprise data & AI platforms" : "",
     "AI product craft",
-    has(resume, /health|clinical|athena/) || (profile.industries ?? []).some(item => /health/i.test(item)) ? "Healthcare AI products" : "",
+    has(resume, /health|clinical/) || (profile.industries ?? []).some(item => /health/i.test(item)) ? "Healthcare AI products" : "",
   ].filter(Boolean), 5);
   const interests = unique([
     ...(profile.strengths ?? []).slice(0, 8),

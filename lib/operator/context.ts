@@ -129,12 +129,21 @@ function normalizeJob(value: unknown): OperatorJob | null {
   if (typeof evidenceValue === "string") {
     try {
       const parsed: unknown = JSON.parse(evidenceValue);
-      evidence = Array.isArray(parsed) ? parsed.map(item => text(item)).filter(Boolean) : [];
+      if (Array.isArray(parsed)) evidence = parsed.map(item => text(item)).filter(Boolean);
+      else if (parsed && typeof parsed === "object") {
+        const record = parsed as Record<string, unknown>;
+        const matches = Array.isArray(record.matches) ? record.matches : Array.isArray(record.evidence) ? record.evidence : [];
+        evidence = matches.map(item => text(item)).filter(Boolean);
+      }
     } catch {
       evidence = [];
     }
   } else if (Array.isArray(evidenceValue)) {
     evidence = evidenceValue.map(item => text(item)).filter(Boolean);
+  } else if (evidenceValue && typeof evidenceValue === "object") {
+    const record = evidenceValue as Record<string, unknown>;
+    const matches = Array.isArray(record.matches) ? record.matches : Array.isArray(record.evidence) ? record.evidence : [];
+    evidence = matches.map(item => text(item)).filter(Boolean);
   }
   return {
     id, title,

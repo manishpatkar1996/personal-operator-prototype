@@ -12,6 +12,7 @@ export type ScoreableJob = {
   title: string;
   company: string;
   location: string;
+  description?: string;
 };
 
 export type JobScore = {
@@ -19,6 +20,16 @@ export type JobScore = {
   fitReason: string;
   evidence: string[];
 };
+
+export type JobMatch = JobScore & { gaps: string[] };
+
+export const MIN_RESUME_CHARS = 80;
+
+export const RESUME_REQUIRED_MESSAGE = "Upload or paste a résumé on You (Setup) before matching this role.";
+
+export function resumeIsUsable(resumeText: string) {
+  return resumeText.trim().length > MIN_RESUME_CHARS;
+}
 
 const STOPWORDS = new Set([
   "a", "an", "and", "at", "for", "from", "in", "of", "on", "or", "the", "to", "with",
@@ -60,7 +71,7 @@ export function scoreJob(profile: ScoreableProfile, job: ScoreableJob): JobScore
 
   const evidence: string[] = [];
   let score = 38;
-  const blob = `${job.title} ${job.company} ${job.location}`;
+  const blob = `${job.title} ${job.company} ${job.location} ${job.description ?? ""}`;
   const resume = profile.resumeText.slice(0, 20_000);
 
   for (const role of profile.targetRoles) {
@@ -137,4 +148,78 @@ export function scoreJob(profile: ScoreableProfile, job: ScoreableJob): JobScore
     : "Limited overlap with the current résumé and preferences — review before investing time.";
 
   return { fitScore, fitReason, evidence: evidence.slice(0, 6) };
+}
+
+export function parseStoredMatch(value: unknown): { matches: string[]; gaps: string[] } {
+  if (Array.isArray(value)) {
+    return { matches: value.filter((item): item is string => typeof item === "string" && Boolean(item.trim())), gaps: [] };
+  }
+  if (typeof value === "string") {
+    try {
+      return parseStoredMatch(JSON.parse(value) as unknown);
+    } catch {
+      return { matches: [], gaps: [] };
+    }
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    const rawMatches = Array.isArray(record.matches) ? record.matches : Array.isArray(record.evidence) ? record.evidence : [];
+    const rawGaps = Array.isArray(record.gaps) ? record.gaps : [];
+    return {
+      matches: rawMatches.map(item => String(item).trim()).filter(Boolean),
+      gaps: rawGaps.map(item => String(item).trim()).filter(Boolean),
+    };
+  }
+  return { matches: [], gaps: [] };
+}
+
+export function matchGaps(profile: ScoreableProfile, job: ScoreableJob, scored: JobScore): string[] {
+  const gaps: string[] = [];
+  const resume = profile.resumeText;
+  const blob = `${job.title} ${job.company} ${job.location} ${job.description ?? ""}`;
+  const resumeTokens = tokens(resume);
+  const companyTokens = tokens(job.company);
+
+  for (const exclusion of profile.exclusions) {
+    if (includesNormalized(blob, exclusion)) {
+      gaps.push(`This posting hits exclusion “${exclusion}” — skip it, or rewrite the story so that work is not the lead.`);
+      break;
+    }
+  }
+
+  if (/\b(account executive|account exec|\bsdr\b|\bbdr\b|quota-carrying)\b/i.test(job.title)
+    && !profile.targetRoles.some(role => /account executive|sales/i.test(role))) {
+    gaps.push("This is a quota-carrying sales title. If you still apply, rewrite the résumé so the story is sales, not product/platform PM.");
+  }
+
+  for (const role of profile.targetRoles) {
+    if ((includesNormalized(job.title, role) || includesNormalized(role, job.title)) && !includesNormalized(resume, role)) {
+      gaps.push(`Put “${role}” (or the equivalent title you actually held) on the résumé so ATS overlap is visible.`);
+      break;
+    }
+  }
+
+  if (profile.locations.length && !profile.locations.some(location => includesNormalized(job.location, location) || includesNormalized(location, job.location))) {
+    gaps.push(`Location “${job.location || "unspecified"}” is outside your saved preferences. Call out relocation or remote willingness only if that is true.`);
+  }
+
+  const missing = [...tokens(blob)].filter(word => !resumeTokens.has(word) && !companyTokens.has(word)).slice(0, 5);
+  if (missing.length) {
+    gaps.push(`ATS keywords in the posting that are missing from the résumé: ${missing.join(", ")}. Add them only if they are true.`);
+  }
+
+  if (!scored.evidence.length) {
+    gaps.push("Little résumé overlap is visible. Lead with platform, AI, and product evidence that actually appears in this posting.");
+  }
+
+  if (!gaps.length) {
+    gaps.push("Tighten the top of the résumé to the overlapping tools and outcomes in this posting. Do not invent facts.");
+  }
+
+  return gaps.slice(0, 6);
+}
+
+export function matchResumeToJob(profile: ScoreableProfile, job: ScoreableJob): JobMatch {
+  const scored = scoreJob(profile, job);
+  return { ...scored, gaps: matchGaps(profile, job, scored) };
 }

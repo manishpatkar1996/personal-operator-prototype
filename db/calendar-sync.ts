@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { addIstDays, istDateParts } from "@/lib/operator/calendar";
+import { addZonedDays, preferredTimezone, zonedDateParts, zonedIso } from "@/lib/operator/calendar";
 import { parseIcs, type IcsEvent } from "@/lib/operator/ics";
 
 function db() {
@@ -40,15 +40,18 @@ async function storedIcsUrl() {
   return row?.ics_url?.trim() ?? "";
 }
 
-function syncWindow(days: number) {
-  const parts = istDateParts(new Date());
-  const start = addIstDays(parts.year, parts.month, parts.day, 0);
-  const end = addIstDays(parts.year, parts.month, parts.day, Math.max(1, days));
+function syncWindow(days: number, timeZone?: string) {
+  const zone = preferredTimezone(timeZone);
+  const parts = zonedDateParts(new Date(), zone);
+  const start = addZonedDays(zone, parts.year, parts.month, parts.day, 0);
+  const end = addZonedDays(zone, parts.year, parts.month, parts.day, Math.max(1, days));
+  const syncStart = zonedIso(zone, start.year, start.month, start.day, 0, 0);
+  const syncEnd = zonedIso(zone, end.year, end.month, end.day, 0, 0);
   return {
-    syncStart: `${start.year}-${start.month}-${start.day}T00:00:00+05:30`,
-    syncEnd: `${end.year}-${end.month}-${end.day}T00:00:00+05:30`,
-    windowStart: new Date(`${start.year}-${start.month}-${start.day}T00:00:00+05:30`),
-    windowEnd: new Date(`${end.year}-${end.month}-${end.day}T00:00:00+05:30`),
+    syncStart,
+    syncEnd,
+    windowStart: new Date(syncStart),
+    windowEnd: new Date(syncEnd),
   };
 }
 
@@ -90,8 +93,8 @@ export async function refreshCalendarFromIcs() {
       .bind("Paste a Google Calendar secret iCal URL in Calendar controls. Writes still queue until a write worker exists.").run();
     return { message: "Add a Google Calendar secret iCal URL under Calendar controls, then refresh." };
   }
-  const preference = await db().prepare("SELECT sync_window_days FROM calendar_preferences WHERE id='primary'").first<{ sync_window_days: number }>();
-  const window = syncWindow(Number(preference?.sync_window_days ?? 7));
+  const preference = await db().prepare("SELECT sync_window_days,timezone FROM calendar_preferences WHERE id='primary'").first<{ sync_window_days: number; timezone: string }>();
+  const window = syncWindow(Number(preference?.sync_window_days ?? 7), preference?.timezone);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), 12_000);
   try {

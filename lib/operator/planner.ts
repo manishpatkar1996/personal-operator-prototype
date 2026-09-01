@@ -1,4 +1,4 @@
-import { remainingCapacityMinutes } from "./calendar.ts";
+import { formatConflictCallout, formatConflictRange, overlapClusters, remainingCapacityMinutes } from "./calendar.ts";
 import { validateOperatorPlan } from "./schema.ts";
 import type { OperatorActionKind, OperatorContext, OperatorDomain, OperatorPlan, OperatorPlanAction, OperatorPlanPriority, OperatorPlanSignal } from "./types.ts";
 
@@ -109,11 +109,23 @@ function signals(context: OperatorContext): OperatorPlanSignal[] {
     id: "signal-resume", category: "info", domain: "career", title: "Career scoring is running without a résumé",
     detail: "Upload or paste a résumé so role rankings can cite evidence instead of seed scores.", sourceIds: ["career-profile"],
   });
-  const remaining = remainingCapacityMinutes(context.calendar, context.today);
+  const remaining = remainingCapacityMinutes(context.calendar, context.today, context.timezone);
   if (remaining < 90) result.push({
     id: "signal-capacity", category: "risk", domain: "calendar", title: `Only ${remaining} minutes of focus capacity remain today`,
     detail: "New Operator blocks will snap to the next free weekday gap instead of overlapping existing events.", sourceIds: context.calendar.map(item => item.id).slice(0, 6),
   });
+  const clusters = overlapClusters(context.calendar, context.today, context.timezone);
+  if (clusters.length) {
+    const primary = clusters.reduce((largest, cluster) => cluster.count > largest.count ? cluster : largest, clusters[0]);
+    result.push({
+      id: "signal-conflicts",
+      category: "risk",
+      domain: "calendar",
+      title: formatConflictCallout(primary, context.timezone),
+      detail: `${primary.titles.join(", ")} · ${formatConflictRange(primary, context.timezone)}. New focus blocks skip this cluster.`,
+      sourceIds: primary.ids.slice(0, 6),
+    });
+  }
   return result.slice(0, 12);
 }
 

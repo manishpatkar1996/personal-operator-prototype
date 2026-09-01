@@ -50,14 +50,33 @@ export type ContentTasteEntry = {
   note?: string;
 };
 
+export const GENERIC_CONTENT_THESIS = "Write in your own voice about work you actually ship. Replace this thesis when you have one.";
+
 export const DEFAULT_CONTENT_VOICE: ContentVoice = {
-  name: "Manish Patkar",
-  role: "Senior PM, athenahealth",
-  beat: "data, AI, and agentic products",
-  target: "Senior / Lead / Principal PM, AI",
+  name: "You",
+  role: "",
+  beat: "the work you actually ship",
+  target: "",
   tone: "Builder/operator: first person, short sentences, one claim with proof. Write like someone shipping, not someone farming the feed.",
   not: "LinkedIn-bro growth-hack, fake vulnerability, engagement bait, carousel-as-text, or motivational platitudes.",
 };
+
+export function isAuthorDefaultVoice(voice: Partial<ContentVoice> | Record<string, unknown> | null | undefined) {
+  const name = String(voice && "name" in voice ? voice.name : "").toLowerCase();
+  const role = String(voice && "role" in voice ? voice.role : "").toLowerCase();
+  return /manish/.test(name) || /athenahealth/.test(role);
+}
+
+export function voiceBannerLine(voice: Partial<ContentVoice> | Record<string, unknown> | null | undefined) {
+  if (!voice || isAuthorDefaultVoice(voice)) return "Voice not set — add your name and role in strategy when you are ready.";
+  const name = String("name" in voice ? voice.name : "").trim();
+  const role = String("role" in voice ? voice.role : "").trim();
+  const target = String("target" in voice ? voice.target : "").trim();
+  if (!name || /^you$/i.test(name)) {
+    return role || target ? [role, target ? `targeting ${target}` : ""].filter(Boolean).join(" · ") : "Your voice · set a name in strategy when you want Samwell to sound like you.";
+  }
+  return [name, role, target ? `targeting ${target}` : ""].filter(Boolean).join(" · ");
+}
 
 export const DEFAULT_LINKEDIN_CRAFT: LinkedInCraft = {
   platformLimitChars: 3_000,

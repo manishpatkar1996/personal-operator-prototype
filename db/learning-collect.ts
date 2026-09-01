@@ -13,6 +13,7 @@ import {
   type FeedItem,
 } from "@/lib/operator/learning-sources";
 import { isHomepageDump, scoreArticle, type ArticleCandidate } from "@/lib/operator/learning-taste";
+import { collectedArticleCopy, collectRunsSummarize } from "@/lib/operator/token-policy";
 
 function db() {
   if (!env.DB) throw new Error("D1 binding DB is unavailable");
@@ -121,7 +122,7 @@ async function selectArticles(candidates: ArticleCandidate[], taste: { tracks: s
     .map(item => ({ item, score: scoreArticle(item, taste) }))
     .filter(entry => entry.score >= 0 && !isHomepageDump(entry.item))
     .sort((left, right) => right.score - left.score || left.item.title.localeCompare(right.item.title));
-  const shortlist = ranked.slice(0, 24).map(entry => entry.item);
+  const shortlist = ranked.slice(0, 16).map(entry => entry.item);
   if (!shortlist.length) return [];
   if (!liveModelsConfigured() || shortlist.length < 3) {
     return shortlist.slice(0, 12).map(item => ({
@@ -135,7 +136,7 @@ async function selectArticles(candidates: ArticleCandidate[], taste: { tracks: s
     const payload = await completeJson(
       "learning_select",
       "Return JSON {selected:[{url, insight, summary, trackHint}]}. Pick 8–12 urls from the supplied candidates only.",
-      JSON.stringify({ taste, candidates: shortlist.map(item => ({ title: item.title, url: item.url, excerpt: item.excerpt.slice(0, 280), source: item.source })) }),
+      JSON.stringify({ taste, candidates: shortlist.map(item => ({ title: item.title, url: item.url, excerpt: item.excerpt.slice(0, 160), source: item.source })) }),
     ) as { selected?: { url?: string; insight?: string; summary?: string; trackHint?: string }[] };
     const byUrl = new Map(shortlist.map(item => [item.url, item]));
     const selected = (payload.selected ?? [])
@@ -216,11 +217,11 @@ export async function collectLearning() {
         excerpt = article.excerpt;
       }
     }
-    if (!insight || insight === article.source) {
-      const distilled = await summarize(article.title, excerpt, [...preferences.interests, ...preferences.want]);
-      insight = distilled.insight;
-      summary = distilled.summary;
-    }
+    const distilled = collectRunsSummarize()
+      ? await summarize(article.title, excerpt, [...preferences.interests, ...preferences.want])
+      : collectedArticleCopy({ ...article, excerpt }, insightFallback);
+    insight = distilled.insight;
+    summary = distilled.summary;
     const trackId = pickTrack(tracks, `${article.title} ${insight} ${article.trackHint} ${preferences.tracks.join(" ")}`) ?? "track-news";
     await db().prepare("INSERT INTO learning_items (id,track_id,title,source,item_type,duration_minutes,status,relevance,url,summary,feedback) VALUES (?,?,?,?,?,?,?,?,?,?,?)")
       .bind(crypto.randomUUID(), trackId, article.title.slice(0, 160), article.source, /arxiv|paper/i.test(article.source) ? "Paper" : "Article", 12, "recommended", insight, article.url, summary, "")
@@ -228,4 +229,28 @@ export async function collectLearning() {
     collected += 1;
   }
   return { collected, skipped, failed, sources: enabled.length, candidates: candidates.length, model: liveModelsConfigured() ? "live" : "deterministic" };
+}
+
+export async function summarizeLearningItem(id: string) {
+  await ensureLearningItemColumns();
+  const item = await db().prepare("SELECT id,title,source,url,relevance,summary FROM learning_items WHERE id=?")
+    .bind(id).first<{ id: string; title: string; source: string; url: string; relevance: string; summary: string }>();
+  if (!item) throw new Error("Learning item was not found");
+  const stored = collectedArticleCopy({ insight: item.relevance, summary: item.summary, excerpt: item.summary || item.relevance, source: item.source }, insightFallback);
+  if (item.relevance.trim() && item.relevance.trim() !== item.source && item.summary.trim()) {
+    return { id, insight: stored.insight, summary: stored.summary, model: "stored", reused: true };
+  }
+  const { preferences } = await getLearningConfiguration();
+  let excerpt = item.summary || item.relevance;
+  if (item.url) {
+    try {
+      const page = await fetchText(item.url);
+      excerpt = articleExcerpt(page.body) || excerpt;
+    } catch {
+      /* keep stored excerpt */
+    }
+  }
+  const distilled = await summarize(item.title, excerpt, [...preferences.interests, ...preferences.want]);
+  await db().prepare("UPDATE learning_items SET relevance=?,summary=? WHERE id=?").bind(distilled.insight, distilled.summary, id).run();
+  return { id, insight: distilled.insight, summary: distilled.summary, model: liveModelsConfigured() ? "live" : "deterministic", reused: false };
 }
